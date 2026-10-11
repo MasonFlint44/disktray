@@ -1,5 +1,6 @@
 using System.Windows;
 using DiskTray.Core.Detection;
+using DiskTray.Core.Usage;
 
 namespace DiskTray.App;
 
@@ -46,7 +47,7 @@ public partial class App : Application
         switch (args)
         {
             case ["--render-icons", string folder]:
-                IconPreview.Run(CreateScanner(), folder);
+                IconPreview.Run(CreateMonitor(), folder);
                 Shutdown();
                 return;
             case ["--exit"]:
@@ -76,7 +77,7 @@ public partial class App : Application
             _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
         Log.Info($"Started {Environment.ProcessPath}");
-        _tray = new TrayController(CreateScanner());
+        _tray = new TrayController(CreateMonitor());
         await _tray.StartAsync();
     }
 
@@ -94,12 +95,17 @@ public partial class App : Application
         base.OnExit(e);
     }
 
-    private static DiskScanner CreateScanner() => new(
-        new SystemDiskProbe(),
-        new LxssRegistry(),
-        new ScanPaths(
-            (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + @"\",
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
-        TimeProvider.System);
+    private static DiskMonitor CreateMonitor()
+    {
+        var scanner = new DiskScanner(
+            new SystemDiskProbe(),
+            new LxssRegistry(),
+            new ScanPaths(
+                (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + @"\",
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
+            TimeProvider.System);
+        var cache = UsageCacheFile.Load();
+        return new DiskMonitor(scanner, new UsageMeter(new WslExe(), cache, TimeProvider.System), cache);
+    }
 }

@@ -1,4 +1,5 @@
 using DiskTray.Core.Detection;
+using DiskTray.Core.Usage;
 
 namespace DiskTray.Core.Tests;
 
@@ -20,6 +21,25 @@ internal sealed class FakeDiskProbe : IDiskProbe
 internal sealed class FakeWslRegistry(WslRegistryData data) : IWslRegistry
 {
     public WslRegistryData Read() => data;
+}
+
+internal sealed class FakeWslCommands : IWslCommands
+{
+    public HashSet<string> Running { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>What each distro prints for a command, keyed by "distro: command".</summary>
+    public Dictionary<string, string> Outputs { get; } = [];
+
+    public List<string> Calls { get; } = [];
+
+    public IReadOnlySet<string> RunningDistros() => Running;
+
+    public string? Run(string distro, IReadOnlyList<string> command)
+    {
+        string key = $"{distro}: {string.Join(' ', command)}";
+        Calls.Add(key);
+        return Outputs.GetValueOrDefault(key);
+    }
 }
 
 internal sealed class FixedClock(DateTimeOffset now) : TimeProvider

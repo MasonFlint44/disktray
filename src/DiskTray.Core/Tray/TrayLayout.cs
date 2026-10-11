@@ -16,15 +16,21 @@ public static class TrayLayout
     /// <summary>Windows cuts tray tooltips off at 127 characters.</summary>
     public const int MaxToolTipLength = 127;
 
-    public static IReadOnlyList<TrayIconModel> Build(DiskSnapshot snapshot, AlertThresholds thresholds, IFormatProvider? provider = null)
+    /// <param name="zone">The time zone for "as of" times. Defaults to the local one.</param>
+    public static IReadOnlyList<TrayIconModel> Build(
+        DiskSnapshot snapshot,
+        AlertThresholds thresholds,
+        IFormatProvider? provider = null,
+        TimeZoneInfo? zone = null)
     {
         provider ??= CultureInfo.CurrentCulture;
+        zone ??= TimeZoneInfo.Local;
         var icons = new List<TrayIconModel>();
         foreach (var file in PinnedFiles(snapshot))
         {
             if (snapshot.DriveOf(file) is { } drive)
             {
-                icons.Add(DiskIcon(file, drive, thresholds, provider));
+                icons.Add(DiskIcon(file, drive, thresholds, provider, snapshot.TakenAt, zone));
             }
         }
 
@@ -37,7 +43,13 @@ public static class TrayLayout
         new[] { snapshot.Docker, snapshot.PrimaryDistro }.OfType<DiskFile>();
 
     /// <summary>The disk file plus its drive's free space: used, reclaimable (when known) and free.</summary>
-    internal static TrayIconModel DiskIcon(DiskFile file, DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
+    internal static TrayIconModel DiskIcon(
+        DiskFile file,
+        DriveSpace drive,
+        AlertThresholds thresholds,
+        IFormatProvider provider,
+        DateTimeOffset now,
+        TimeZoneInfo zone)
     {
         var color = Palette.For(file.Kind);
         var amounts = file.UsedBytes is { } used
@@ -47,7 +59,8 @@ public static class TrayLayout
         string sizeLine = $"{file.Name} · {ByteSize.Format(file.SizeBytes, provider)}";
         if (file.ReclaimableBytes is { } reclaimable)
         {
-            sizeLine += $" ({ByteSize.Format(reclaimable, provider)} reclaimable)";
+            string asOf = file.UsedAsOf is { } measuredAt ? $" as of {AsOf(measuredAt, now, zone, provider)}" : "";
+            sizeLine += $" ({ByteSize.Format(reclaimable, provider)} reclaimable{asOf})";
         }
 
         return new TrayIconModel(
@@ -89,6 +102,19 @@ public static class TrayLayout
             AlertLevel.Warning => line + $" – below {ByteSize.FormatPercent(thresholds.WarningFreeFraction, provider)} warning",
             _ => line,
         };
+    }
+
+    /// <summary>The time for a reading from today, or else the date: "2:14 PM", "Oct 9", "12/30/2025".</summary>
+    internal static string AsOf(DateTimeOffset measuredAt, DateTimeOffset now, TimeZoneInfo zone, IFormatProvider provider)
+    {
+        var then = TimeZoneInfo.ConvertTime(measuredAt, zone);
+        var today = TimeZoneInfo.ConvertTime(now, zone);
+        if (then.Date == today.Date)
+        {
+            return then.ToString("t", provider);
+        }
+
+        return then.Year == today.Year ? then.ToString("MMM d", provider) : then.ToString("d", provider);
     }
 
     private static string ShortName(DiskFile file) => file.Kind == DiskKind.DockerData ? "Docker" : file.Name;

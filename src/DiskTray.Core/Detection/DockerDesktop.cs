@@ -7,6 +7,11 @@ public static class DockerDesktop
 {
     public const string DataDiskFileName = "docker_data.vhdx";
 
+    /// <summary>Docker Desktop's distro, which mounts docker_data.vhdx at <see cref="DataDiskMountPoint"/>.</summary>
+    public const string MainDistroName = "docker-desktop";
+
+    public const string DataDiskMountPoint = "/mnt/docker-desktop-disk";
+
     /// <summary>The distro older Docker Desktop versions kept their data in, before docker_data.vhdx.</summary>
     public const string LegacyDataDistroName = "docker-desktop-data";
 

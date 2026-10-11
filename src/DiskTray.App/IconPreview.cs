@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text;
-using DiskTray.Core.Detection;
 using DiskTray.Core.Tray;
 
 namespace DiskTray.App;
@@ -13,10 +12,10 @@ internal static class IconPreview
 {
     private static readonly int[] Sizes = [16, 20, 24, 32, 48, 64];
 
-    public static void Run(DiskScanner scanner, string folder)
+    public static void Run(DiskMonitor monitor, string folder)
     {
         Directory.CreateDirectory(folder);
-        var models = TrayLayout.Build(scanner.Scan(), new AlertThresholds()).ToList();
+        var models = TrayLayout.Build(monitor.Measure(), new AlertThresholds()).ToList();
         models.Add(Sample("sample-reclaimable", AlertLevel.Normal));
         models.Add(Sample("sample-critical", AlertLevel.Critical));
 

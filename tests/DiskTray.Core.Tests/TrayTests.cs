@@ -40,7 +40,7 @@ public class PieChartTests
 public class TrayLayoutTests
 {
     private static IReadOnlyList<TrayIconModel> Build(DiskSnapshot snapshot) =>
-        TrayLayout.Build(snapshot, new AlertThresholds(), CultureInfo.InvariantCulture);
+        TrayLayout.Build(snapshot, new AlertThresholds(), CultureInfo.InvariantCulture, TimeZoneInfo.Utc);
 
     [Fact]
     public void Shows_docker_then_the_distro_then_the_drive() =>
@@ -77,11 +77,40 @@ public class TrayLayoutTests
         var file = new DiskFile("docker", "Docker data", @"C:\d.vhdx", DiskKind.DockerData, 138) { UsedBytes = 34 };
         var drive = new DriveSpace(@"C:\", 472, 51);
 
-        var icon = TrayLayout.DiskIcon(file, drive, new AlertThresholds(), CultureInfo.InvariantCulture);
+        var icon = TrayLayout.DiskIcon(file, drive, new AlertThresholds(), CultureInfo.InvariantCulture, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc);
 
         Assert.Equal([Palette.Docker.Main, Palette.Docker.Shade, Palette.Free], icon.Chart.Slices.Select(s => s.Color));
         Assert.Equal(104 / 189.0, icon.Chart.Slices[1].Fraction, 9);
         Assert.StartsWith("Docker data · 138 bytes (104 bytes reclaimable)", icon.ToolTip);
+    }
+
+    [Fact]
+    public void Says_when_reclaimable_space_was_last_measured()
+    {
+        var now = new DateTimeOffset(2026, 10, 11, 18, 0, 0, TimeSpan.Zero);
+        var file = new DiskFile("docker", "Docker data", @"C:\d.vhdx", DiskKind.DockerData, 138)
+        {
+            UsedBytes = 34,
+            UsedAsOf = now.AddHours(-3).AddMinutes(-46),
+        };
+
+        var icon = TrayLayout.DiskIcon(file, new DriveSpace(@"C:\", 472, 51), new AlertThresholds(), CultureInfo.InvariantCulture, now, TimeZoneInfo.Utc);
+
+        Assert.StartsWith("Docker data · 138 bytes (104 bytes reclaimable as of 14:14)\n", icon.ToolTip);
+    }
+
+    [Theory]
+    [InlineData("2026-10-11T12:05:00Z", "08:05")]
+    [InlineData("2026-10-11T02:00:00Z", "Oct 10")]
+    [InlineData("2026-10-09T15:00:00Z", "Oct 9")]
+    [InlineData("2025-12-30T15:00:00Z", "12/30/2025")]
+    public void Writes_as_of_times_in_the_local_zone(string measuredAt, string expected)
+    {
+        // 6 PM in New York (UTC−4 in October).
+        var now = new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero);
+        var zone = TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+
+        Assert.Equal(expected, TrayLayout.AsOf(DateTimeOffset.Parse(measuredAt, CultureInfo.InvariantCulture), now, zone, CultureInfo.InvariantCulture));
     }
 
     [Fact]

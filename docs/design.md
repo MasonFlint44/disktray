@@ -68,9 +68,18 @@ chosen color.
   (default 2 GiB) such as `.vhdx`, `.vhd`, `.vmdk` and `.qcow2`. Large files that
   aren't pinned show up in the flyout's "Other large files" section, which can be
   toggled off, and each has a pin button.
-- **"Used inside" numbers.** Queried from WSL/Docker (e.g. `df`, `docker system df`)
-  only when they're already running. Otherwise the last known value is shown with
-  an "as of" time. The app never starts WSL or Docker just to measure.
+- **"Used inside" numbers.** `df -P -B1 <mount>` run through `wsl.exe --exec`, only in
+  distros listed by `wsl.exe --list --running --quiet`, so the app never starts WSL or
+  Docker just to measure. A distro's disk is its `/`. Docker's data disk is mounted at
+  `/mnt/docker-desktop-disk` in the `docker-desktop` distro (the legacy
+  `docker-desktop-data` distro uses its `/`). The df line has to be for that exact mount
+  point, because df on a plain folder reports the disk the folder is on.
+  - When a distro isn't running, the last reading is used and the tooltip says when it
+    was taken (`94 GiB reclaimable as of 2:14 PM`, or a date). Growth of the disk file
+    since then counts as used, so the reclaimable number is never overstated.
+  - There's no way to run a command only if the distro is already up. If a distro stops
+    in the moment between the list and the `df`, WSL starts it again, and it shuts down
+    on its own once idle.
 - **Add a path…** pins any file or folder by hand.
 
 ## Flyout (left-click a tray icon)
@@ -159,8 +168,8 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
   needs admin. It shuts down WSL and compacts the VHDX paths it's given (diskpart
   `compact vdisk`, or `Optimize-VHD` when Hyper-V tools are present), then reports
   back.
-- **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, and logs go to
-  `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
+- **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
+  readings in `usage.json` there, and logs go to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
 - **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
   place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
   running while WSL is shut down for a compact. Start with Windows uses the Run key or

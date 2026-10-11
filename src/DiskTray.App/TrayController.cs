@@ -3,7 +3,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using DiskTray.Core.Detection;
+using DiskTray.Core;
 using DiskTray.Core.Tray;
 using H.NotifyIcon;
 
@@ -14,17 +14,20 @@ internal sealed class TrayController : IDisposable
 {
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
 
-    private readonly DiskScanner _scanner;
+    private readonly DiskMonitor _monitor;
     private readonly AlertThresholds _thresholds = new();
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
     private readonly Dictionary<string, System.Drawing.Icon> _images = [];
-    private readonly Dictionary<string, string> _toolTips = [];
     private bool _refreshing;
+    private DiskSnapshot? _snapshot;
 
-    public TrayController(DiskScanner scanner)
+    // Why the last refresh failed, shown in every tooltip until one succeeds.
+    private string? _problem;
+
+    public TrayController(DiskMonitor monitor)
     {
-        _scanner = scanner;
+        _monitor = monitor;
         _timer = new DispatcherTimer { Interval = RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
     }
@@ -45,14 +48,16 @@ internal sealed class TrayController : IDisposable
         _refreshing = true;
         try
         {
-            var snapshot = await Task.Run(_scanner.Scan);
-            Show(TrayLayout.Build(snapshot, _thresholds));
+            _snapshot = await Task.Run(_monitor.Measure);
+            _problem = null;
+            Redraw();
         }
         catch (Exception e)
         {
             // Keep whatever the icons showed last, and say why they're stale.
             Log.Error("Refresh failed", e);
-            ShowError(e);
+            _problem = $"Couldn't refresh: {e.Message}";
+            Redraw();
         }
         finally
         {
@@ -77,12 +82,22 @@ internal sealed class TrayController : IDisposable
         _images.Clear();
     }
 
-    private void Show(IReadOnlyList<TrayIconModel> models)
+    private void Redraw()
     {
         int size = NativeMethods.TrayIconSize();
+        if (_snapshot is null)
+        {
+            // Nothing measured yet. Show one plain icon so there's still a way to exit.
+            var empty = new PieChart([new PieSlice(1, Palette.Free)], AlertLevel.Normal);
+            SetIcon(TrayLayout.DriveKey, PieIconRenderer.ToIcon(PieIconRenderer.Render(empty, size)), _problem is null ? "DiskTray" : TrayLayout.ToolTip("DiskTray", _problem));
+            return;
+        }
+
+        var models = TrayLayout.Build(_snapshot, _thresholds);
         foreach (var model in models)
         {
-            SetIcon(model.Key, PieIconRenderer.ToIcon(PieIconRenderer.Render(model.Chart, size)), model.ToolTip);
+            string toolTip = _problem is null ? model.ToolTip : TrayLayout.ToolTip(model.ToolTip, _problem);
+            SetIcon(model.Key, PieIconRenderer.ToIcon(PieIconRenderer.Render(model.Chart, size)), toolTip);
         }
 
         foreach (string key in _icons.Keys.Except(models.Select(m => m.Key)).ToList())
@@ -91,24 +106,6 @@ internal sealed class TrayController : IDisposable
             icon?.Dispose();
             _images.Remove(key, out var image);
             image?.Dispose();
-            _toolTips.Remove(key);
-        }
-    }
-
-    private void ShowError(Exception error)
-    {
-        string problem = $"Couldn't refresh: {error.Message}";
-        if (_icons.Count == 0)
-        {
-            // Nothing measured yet. Show one plain icon so there's still a way to exit.
-            var empty = new PieChart([new PieSlice(1, Palette.Free)], AlertLevel.Normal);
-            SetIcon(TrayLayout.DriveKey, PieIconRenderer.ToIcon(PieIconRenderer.Render(empty, NativeMethods.TrayIconSize())), TrayLayout.ToolTip("DiskTray", problem));
-            return;
-        }
-
-        foreach (var (key, icon) in _icons)
-        {
-            icon.ToolTipText = TrayLayout.ToolTip(_toolTips.GetValueOrDefault(key, "DiskTray"), problem);
         }
     }
 
@@ -140,7 +137,6 @@ internal sealed class TrayController : IDisposable
         }
 
         _images[key] = image;
-        _toolTips[key] = toolTip;
     }
 
     private ContextMenu BuildMenu()
