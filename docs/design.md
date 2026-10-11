@@ -93,7 +93,8 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
 - Header: "Disk usage · Drive C: · 472 GiB" and a settings gear.
 - A warning banner when below a level, e.g. "51 GiB free (11%) – below your 15% warning".
 - A donut of the whole drive with free space in the center, and a legend listing
-  each item's size plus "N used · N reclaimable".
+  each item's size plus "N used · N reclaimable". Disk files go largest first;
+  Windows & other and Free are always last.
 - "Lighter shade = space a disk file is holding but not using."
 - "Other large files" (over 2 GiB, not pinned), each with a pin button. Can be toggled.
 - "Reclaimable by compacting" total, and one **Clean up…** button.
@@ -110,6 +111,8 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
   (default 9:00 AM). A drop toast counts as that day's reminder.
 - An alert re-arms only after free space climbs 3 GiB above its level, so it doesn't
   flap.
+- Each toast includes a picture of the flyout's donut and legend, drawn for the
+  Windows mode (notifications don't follow the app theme).
 - Each toast replaces the last, so the notification center holds at most one.
   Clicking it opens the flyout.
 - What has fired is kept in `alerts.json`, so restarting doesn't notify again.
@@ -202,8 +205,11 @@ are only Alerts (the two levels) and General.
   closes the running copy cleanly, so its icons leave the tray (used by
   `scripts/deploy.sh`, and later by updates).
 - **`DiskTray.exe --render-icons <folder>`** saves the current icons as PNGs at several
-  sizes plus their tooltips, and the flyout in light and dark, for checking the drawing
-  without the tray.
+  sizes plus their tooltips, the flyout and the notification picture in light and dark,
+  and the app icon, for checking the drawing without the tray.
+- **App icon.** `src/DiskTray.App/app.ico` is the flyout's donut (Docker and WSL with
+  their tints, and Windows & other), drawn by `AppIcon`. `--render-icons` writes a fresh
+  `app.ico` to copy over it after changing the drawing.
 - **Build.** `EnableWindowsTargeting` lets everything build from WSL. The app only
   runs on Windows. Tests use xUnit v3 on Microsoft.Testing.Platform (opted in through
   `global.json`).

@@ -23,7 +23,8 @@ internal static class Notifier
         ToastNotificationManagerCompat.OnActivated += _ =>
             Application.Current?.Dispatcher.BeginInvoke(() => Clicked?.Invoke(null, EventArgs.Empty));
 
-    public static void Show(AlertToast toast)
+    /// <param name="image">A picture of the drive to show under the text, if there is one.</param>
+    public static void Show(AlertToast toast, string? image)
     {
         try
         {
@@ -31,6 +32,11 @@ internal static class Notifier
             foreach (string line in toast.Body.Split('\n'))
             {
                 builder.AddText(line);
+            }
+
+            if (image is not null)
+            {
+                builder.AddInlineImage(new Uri(image), "Drive breakdown");
             }
 
             builder.Show(t => t.Tag = Tag);

@@ -31,7 +31,8 @@ public sealed record FlyoutModel(
 
 /// <summary>
 /// Works out the flyout for the system drive: the same items as the drive's tray icon, with
-/// each disk file split into used and reclaimable space when that's known.
+/// each disk file split into used and reclaimable space when that's known. Disk files go
+/// largest first; Windows &amp; other and free always come last.
 /// </summary>
 public static class FlyoutLayout
 {
@@ -51,7 +52,7 @@ public static class FlyoutLayout
         provider ??= CultureInfo.CurrentCulture;
         zone ??= TimeZoneInfo.Local;
         var drive = snapshot.SystemDrive;
-        var files = TrayLayout.PinnedFilesOn(snapshot, drive);
+        var files = TrayLayout.PinnedFilesOn(snapshot, drive).OrderByDescending(f => f.SizeBytes).ToList();
         long other = TrayLayout.OtherBytes(drive, files);
         var otherColor = theme == SurfaceTheme.Light ? Palette.OtherOnLight : Palette.Other;
         var freeColor = theme == SurfaceTheme.Light ? Palette.FreeOnLight : Palette.Free;

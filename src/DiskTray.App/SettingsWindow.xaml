@@ -42,7 +42,8 @@
       <RowDefinition Height="Auto" />
     </Grid.RowDefinitions>
 
-    <ui:TitleBar Title="DiskTray Settings" ShowMaximize="False" ShowMinimize="False" />
+    <ui:TitleBar Title="DiskTray Settings" ShowMaximize="False" ShowMinimize="False"
+                 Icon="{ui:ImageIcon 'pack://application:,,,/app.ico', Width=16, Height=16}" />
 
     <TabControl x:Name="Tabs" Grid.Row="1" Margin="16,4,16,0">
       <TabItem Header="Alerts">

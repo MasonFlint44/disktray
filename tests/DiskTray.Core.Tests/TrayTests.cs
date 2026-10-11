@@ -205,4 +205,22 @@ public class IcoWriterTests
     [Fact]
     public void Rejects_the_wrong_number_of_pixels() =>
         Assert.Throws<ArgumentException>(() => IcoWriter.Write(2, 2, new byte[15]));
+
+    [Fact]
+    public void Packs_several_pngs_into_one_icon()
+    {
+        byte[] small = [1, 2, 3];
+        byte[] large = [4, 5, 6, 7];
+
+        byte[] ico = IcoWriter.WritePngs([(16, small), (256, large)]);
+
+        Assert.Equal(2, BinaryPrimitives.ReadUInt16LittleEndian(ico.AsSpan(4)));
+        Assert.Equal(16, ico[6]);
+        Assert.Equal(3, BinaryPrimitives.ReadInt32LittleEndian(ico.AsSpan(6 + 8)));
+        Assert.Equal(38, BinaryPrimitives.ReadInt32LittleEndian(ico.AsSpan(6 + 12)));
+        Assert.Equal(0, ico[22]);
+        Assert.Equal(41, BinaryPrimitives.ReadInt32LittleEndian(ico.AsSpan(22 + 12)));
+        Assert.Equal(small, ico[38..41]);
+        Assert.Equal(large, ico[41..]);
+    }
 }

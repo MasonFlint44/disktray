@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace DiskTray.Core.Tray;
 
-/// <summary>Writes a single-image .ico file from 32-bit pixels.</summary>
+/// <summary>Writes .ico files: one image from 32-bit pixels, or several sizes from PNGs.</summary>
 public static class IcoWriter
 {
     private const int IconDirSize = 6;
@@ -57,6 +57,40 @@ public static class IcoWriter
         for (int y = 0; y < height; y++)
         {
             bgra.Slice(y * stride, stride).CopyTo(pixels[((height - 1 - y) * stride)..]);
+        }
+
+        return ico;
+    }
+
+    /// <summary>
+    /// Writes an .ico holding each image as a PNG, which Windows reads at every size. Used
+    /// for the app's own icon, where the large sizes would be big as raw pixels.
+    /// </summary>
+    /// <param name="images">Square PNGs, 1–256 pixels on each side.</param>
+    public static byte[] WritePngs(IReadOnlyList<(int Size, byte[] Png)> images)
+    {
+        if (images.Any(i => i.Size is < 1 or > 256))
+        {
+            throw new ArgumentOutOfRangeException(nameof(images), "Icons are 1–256 pixels on each side.");
+        }
+
+        int offset = IconDirSize + (IconDirEntrySize * images.Count);
+        var ico = new byte[offset + images.Sum(i => i.Png.Length)];
+        var span = ico.AsSpan();
+        BinaryPrimitives.WriteUInt16LittleEndian(span[2..], 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(span[4..], (ushort)images.Count);
+
+        for (int i = 0; i < images.Count; i++)
+        {
+            var (size, png) = images[i];
+            var entry = span[(IconDirSize + (IconDirEntrySize * i))..];
+            entry[0] = entry[1] = (byte)(size == 256 ? 0 : size);
+            BinaryPrimitives.WriteUInt16LittleEndian(entry[4..], 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(entry[6..], 32);
+            BinaryPrimitives.WriteInt32LittleEndian(entry[8..], png.Length);
+            BinaryPrimitives.WriteInt32LittleEndian(entry[12..], offset);
+            png.CopyTo(span[offset..]);
+            offset += png.Length;
         }
 
         return ico;

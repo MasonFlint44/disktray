@@ -8,9 +8,14 @@
     <UseWPF>true</UseWPF>
     <AssemblyName>DiskTray</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Drawn by AppIcon. Running DiskTray.exe with render-icons writes a fresh copy. -->
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- LibraryImport generates unsafe marshalling code. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup>
+    <Resource Include="app.ico" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />
   </ItemGroup>

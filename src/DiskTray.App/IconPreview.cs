@@ -14,8 +14,8 @@ namespace DiskTray.App;
 
 /// <summary>
 /// <c>DiskTray.exe --render-icons &lt;folder&gt;</c>: saves the current icons as PNGs at
-/// several sizes, plus their tooltips, and the flyout in both themes, for checking the
-/// drawing without the tray.
+/// several sizes, plus their tooltips, the flyout and the notification picture in both
+/// themes, and the app icon (app.ico), for checking the drawing without the tray.
 /// </summary>
 internal static class IconPreview
 {
@@ -46,6 +46,21 @@ internal static class IconPreview
         }
 
         File.WriteAllText(Path.Combine(folder, "tooltips.txt"), text.ToString());
+
+        AppIcon.SaveIco(Path.Combine(folder, "app.ico"));
+        foreach (int size in AppIcon.Sizes)
+        {
+            PieIconRenderer.SavePng(AppIcon.Render(size), Path.Combine(folder, $"app-{size}.png"));
+        }
+
+        foreach (var theme in new[] { SurfaceTheme.Dark, SurfaceTheme.Light })
+        {
+            var model = FlyoutLayout.Build(snapshot, SettingsFile.Load().Thresholds, theme, DateTimeOffset.Now, TimeSpan.FromMinutes(5));
+            if (ToastImage.Save(model, theme) is { } image)
+            {
+                File.Move(image, Path.Combine(folder, $"toast-{theme.ToString().ToLowerInvariant()}.png"), overwrite: true);
+            }
+        }
 
         SaveFlyout(snapshot, ApplicationTheme.Dark, null, Path.Combine(folder, "flyout-dark.png"));
         SaveFlyout(snapshot, ApplicationTheme.Light, null, Path.Combine(folder, "flyout-light.png"));

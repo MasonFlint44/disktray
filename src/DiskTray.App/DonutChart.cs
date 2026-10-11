@@ -10,16 +10,30 @@ internal sealed class DonutChart : FrameworkElement
     public static readonly DependencyProperty ChartProperty = DependencyProperty.Register(
         nameof(Chart), typeof(PieChart), typeof(DonutChart), new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    /// <summary>How wide the ring is, as a fraction of the radius.</summary>
-    private const double RingFraction = 0.34;
+    public static readonly DependencyProperty RingFractionProperty = DependencyProperty.Register(
+        nameof(RingFraction), typeof(double), typeof(DonutChart), new FrameworkPropertyMetadata(0.34, FrameworkPropertyMetadataOptions.AffectsRender));
 
-    /// <summary>The gap between slices, in DIPs, measured along the middle of the ring.</summary>
-    private const double Gap = 2;
+    public static readonly DependencyProperty GapProperty = DependencyProperty.Register(
+        nameof(Gap), typeof(double), typeof(DonutChart), new FrameworkPropertyMetadata(2.0, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public PieChart? Chart
     {
         get => (PieChart?)GetValue(ChartProperty);
         set => SetValue(ChartProperty, value);
+    }
+
+    /// <summary>How wide the ring is, as a fraction of the radius.</summary>
+    public double RingFraction
+    {
+        get => (double)GetValue(RingFractionProperty);
+        set => SetValue(RingFractionProperty, value);
+    }
+
+    /// <summary>The gap between slices, in DIPs, measured along the middle of the ring.</summary>
+    public double Gap
+    {
+        get => (double)GetValue(GapProperty);
+        set => SetValue(GapProperty, value);
     }
 
     protected override void OnRender(DrawingContext context)

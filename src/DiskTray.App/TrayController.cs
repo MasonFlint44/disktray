@@ -184,7 +184,9 @@ internal sealed class TrayController : IDisposable
 
         if (toast is not null)
         {
-            Notifier.Show(toast);
+            var theme = ToastImage.WindowsMode();
+            var picture = FlyoutLayout.Build(_snapshot, _settings.Thresholds, theme, DateTimeOffset.Now, _settings.RefreshInterval);
+            Notifier.Show(toast, ToastImage.Save(picture, theme));
         }
     }
 

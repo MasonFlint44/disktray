@@ -1,0 +1,68 @@
+<UserControl x:Class="DiskTray.App.DriveBreakdown"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:local="clr-namespace:DiskTray.App"
+             xmlns:sys="clr-namespace:System;assembly=System.Runtime"
+             xmlns:flyout="clr-namespace:DiskTray.Core.Flyout;assembly=DiskTray.Core"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance flyout:FlyoutModel}"
+             Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+  <UserControl.Resources>
+    <!-- Sizes for the flyout. Notifications set their own; see ToastImage. -->
+    <sys:Double x:Key="DonutSize">128</sys:Double>
+    <sys:Double x:Key="CenterFontSize">20</sys:Double>
+    <sys:Double x:Key="NameFontSize">13</sys:Double>
+    <sys:Double x:Key="DetailFontSize">12</sys:Double>
+    <local:RgbBrushConverter x:Key="Brush" />
+    <local:VisibleWhenSetConverter x:Key="VisibleWhenSet" />
+    <Style x:Key="Secondary" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="{DynamicResource DetailFontSize}" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+    </Style>
+  </UserControl.Resources>
+
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="Auto" />
+      <ColumnDefinition Width="16" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <Grid Width="{DynamicResource DonutSize}" Height="{DynamicResource DonutSize}" VerticalAlignment="Top"
+          AutomationProperties.Name="{Binding DonutDescription}">
+      <local:DonutChart Chart="{Binding Donut}" />
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+        <TextBlock Text="{Binding FreeSize}" FontSize="{DynamicResource CenterFontSize}" FontWeight="SemiBold" HorizontalAlignment="Center" />
+        <TextBlock Text="free" Style="{StaticResource Secondary}" HorizontalAlignment="Center" />
+      </StackPanel>
+    </Grid>
+
+    <ItemsControl Grid.Column="2" ItemsSource="{Binding Legend}" VerticalAlignment="Center" Focusable="False">
+      <ItemsControl.ItemTemplate>
+        <DataTemplate DataType="flyout:LegendItem">
+          <Grid Margin="0,4">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="18" />
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Border Width="10" Height="10" CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Center"
+                    Background="{Binding Color, Converter={StaticResource Brush}}"
+                    BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" />
+            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="{DynamicResource NameFontSize}" TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="2" Text="{Binding Size}" FontSize="{DynamicResource NameFontSize}" FontWeight="SemiBold" Margin="8,0,0,0" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding Detail}" Style="{StaticResource Secondary}"
+                       Margin="0,1,0,0" Visibility="{Binding Detail, Converter={StaticResource VisibleWhenSet}}" />
+          </Grid>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+  </Grid>
+</UserControl>

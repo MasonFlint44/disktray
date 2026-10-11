@@ -12,7 +12,6 @@
              FontFamily="Segoe UI Variable Text, Segoe UI"
              Foreground="{DynamicResource TextFillColorPrimaryBrush}">
   <UserControl.Resources>
-    <local:RgbBrushConverter x:Key="Brush" />
     <local:VisibleWhenSetConverter x:Key="VisibleWhenSet" />
     <local:SeverityConverter x:Key="Severity" />
     <Style x:Key="Secondary" TargetType="TextBlock">
@@ -47,47 +46,7 @@
       </ItemsControl.ItemTemplate>
     </ItemsControl>
 
-    <Grid Margin="0,16,0,0">
-      <Grid.ColumnDefinitions>
-        <ColumnDefinition Width="128" />
-        <ColumnDefinition Width="16" />
-        <ColumnDefinition Width="*" />
-      </Grid.ColumnDefinitions>
-
-      <Grid Width="128" Height="128" VerticalAlignment="Top"
-            AutomationProperties.Name="{Binding DonutDescription}">
-        <local:DonutChart Chart="{Binding Donut}" />
-        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-          <TextBlock Text="{Binding FreeSize}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" />
-          <TextBlock Text="free" Style="{StaticResource Secondary}" HorizontalAlignment="Center" />
-        </StackPanel>
-      </Grid>
-
-      <ItemsControl Grid.Column="2" ItemsSource="{Binding Legend}" VerticalAlignment="Center" Focusable="False">
-        <ItemsControl.ItemTemplate>
-          <DataTemplate DataType="flyout:LegendItem">
-            <Grid Margin="0,4">
-              <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="18" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-              </Grid.ColumnDefinitions>
-              <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-              </Grid.RowDefinitions>
-              <Border Width="10" Height="10" CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Center"
-                      Background="{Binding Color, Converter={StaticResource Brush}}"
-                      BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}" BorderThickness="1" />
-              <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" TextTrimming="CharacterEllipsis" />
-              <TextBlock Grid.Column="2" Text="{Binding Size}" FontSize="13" FontWeight="SemiBold" Margin="8,0,0,0" />
-              <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding Detail}" Style="{StaticResource Secondary}"
-                         Margin="0,1,0,0" Visibility="{Binding Detail, Converter={StaticResource VisibleWhenSet}}" />
-            </Grid>
-          </DataTemplate>
-        </ItemsControl.ItemTemplate>
-      </ItemsControl>
-    </Grid>
+    <local:DriveBreakdown Margin="0,16,0,0" />
 
     <TextBlock Text="Lighter shade = space a disk file is holding but not using." Style="{StaticResource Secondary}"
                Margin="0,16,0,0" Visibility="{Binding ShowsReclaimable, Converter={StaticResource VisibleWhenSet}}" />

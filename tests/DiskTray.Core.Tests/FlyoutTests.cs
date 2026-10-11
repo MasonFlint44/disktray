@@ -87,6 +87,22 @@ public class FlyoutLayoutTests
     }
 
     [Fact]
+    public void Puts_the_largest_disk_file_first()
+    {
+        var snapshot = Measured();
+        snapshot = snapshot with
+        {
+            Files = snapshot.Files.Select(f => f.Id == Machine.UbuntuId ? f with { SizeBytes = 200L << 30 } : f).ToList(),
+        };
+
+        var flyout = Build(snapshot);
+
+        Assert.Equal(["Ubuntu", "Docker data", "Windows & other", "Free"], flyout.Legend.Select(i => i.Name));
+        Assert.Equal([Palette.Wsl.Main, Palette.Wsl.Reclaimable, Palette.Docker.Main], flyout.Donut.Slices.Take(3).Select(s => s.Color));
+        Assert.StartsWith("Ubuntu", flyout.ReclaimableBreakdown);
+    }
+
+    [Fact]
     public void Says_how_to_measure_files_that_havent_been()
     {
         var flyout = Build(Machine.Scan());
