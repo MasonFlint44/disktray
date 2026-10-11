@@ -46,6 +46,22 @@
       </ItemsControl.ItemTemplate>
     </ItemsControl>
 
+    <Border x:Name="CleanupStatus" Margin="0,12,0,0" Padding="12,10" CornerRadius="6" Visibility="Collapsed"
+            Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <ui:ProgressRing IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0" VerticalAlignment="Center" />
+        <TextBlock x:Name="CleanupText" Grid.Column="1" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center" />
+        <ui:Button x:Name="CancelCleanup" Grid.Column="2" Content="Cancel" Margin="10,0,0,0" Padding="10,4" FontSize="12"
+                   Click="OnCancelCleanupClick" Visibility="Collapsed" />
+      </Grid>
+    </Border>
+
     <local:DriveBreakdown Margin="0,16,0,0" />
 
     <TextBlock Text="Lighter shade = space a disk file is holding but not using." Style="{StaticResource Secondary}"
@@ -64,7 +80,11 @@
     </StackPanel>
 
     <Border Style="{StaticResource Divider}" />
-    <TextBlock Text="{Binding Footer}" Style="{StaticResource Secondary}" Margin="0,12,0,0"
-               Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+    <Grid Margin="0,12,0,0">
+      <TextBlock Text="{Binding Footer}" Style="{StaticResource Secondary}" VerticalAlignment="Center" Margin="0,0,110,0"
+                 Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
+      <ui:Button x:Name="CleanupButton" Content="Clean up…" HorizontalAlignment="Right" Padding="12,5"
+                 Click="OnCleanupClick" />
+    </Grid>
   </StackPanel>
 </UserControl>

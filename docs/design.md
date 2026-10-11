@@ -97,8 +97,12 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
   Windows & other and Free are always last.
 - "Lighter shade = space a disk file is holding but not using."
 - "Other large files" (over 2 GiB, not pinned), each with a pin button. Can be toggled.
-- "Reclaimable by compacting" total, and one **Clean up…** button.
-- Footer: "Updated 1:41 PM · checks every 5 min".
+- "Reclaimable by compacting" total.
+- Footer: "Updated 1:41 PM · checks every 5 min", and the **Clean up…** button.
+- While a clean up runs, a line under the banners says where it is ("Compacts once you
+  quit Docker Desktop and close Ubuntu", "Compacting Docker data (1 of 2) · 40%"), with
+  **Cancel** while it's still waiting. The tray menu's **Clean up…** turns into
+  **Cancel clean up** then.
 
 ## Alerts
 
@@ -120,24 +124,43 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
 
 ## Clean up dialog
 
-One dialog with two steps. Both are on by default, and either can be unchecked.
-Nothing runs until the user clicks **Clean up**.
+One dialog with two steps, opened from the flyout's **Clean up…** button or the tray
+menu. Both steps are on by default, and either can be unchecked. Nothing runs until the
+user clicks **Clean up**.
 
 1. **Prune Docker** (runs now, while Docker is running).
-   - Build cache and dangling images.
-   - Unused volumes, grouped by Compose project, behind "Choose what to remove".
-     Each group has a confidence tag (see below).
-2. **Compact disks.**
+   - Build cache (`docker builder prune --force`, the part Docker counts as reclaimable)
+     and dangling images (`docker image prune --force`).
+   - Unused volumes (no container, running or stopped, uses them), grouped by Compose
+     project, behind "Choose what to remove". Each group has a confidence tag (see
+     below). Picked volumes are removed one at a time with `docker volume rm`, never
+     `volume prune`, so one that's back in use doesn't stop the rest.
+   - Only offered when `docker desktop status` says Docker Desktop is running; otherwise
+     the step says to start it. DiskTray never starts it on its own.
+   - The dialog opens straight away; the prune step fills in once Docker has answered
+     (`docker system df -v` can take a few seconds), and **Clean up** waits for that.
+2. **Compact disks** (Docker's data disk and the main distro's).
+   - Shows each disk's size now and roughly after ("Docker 129 → ~19 GiB"): what's in
+     use, less what the prune takes out of Docker's.
    - When: **When WSL is idle** (default) or **Right away**.
-     - Idle: starts once Docker Desktop has quit and no WSL distros are running.
-       Nothing gets interrupted.
-     - Right away: shows an amber warning listing what gets closed (open terminals,
-       VS Code and Claude Code sessions, running containers).
-   - Takes about 10–20 min, asks for admin, and restarts Docker Desktop afterwards
-     (optional).
+     - Idle: starts once Docker Desktop has quit and no WSL distros are running (checked
+       every 30 s). Nothing gets interrupted.
+     - Right away: shows an amber warning listing what gets closed (each running distro's
+       terminals, VS Code and Claude Code sessions, and Docker Desktop's running
+       containers).
+   - Takes about 10–20 min and asks for admin. **Start Docker Desktop afterwards** is
+     ticked when Docker Desktop is running as the dialog opens.
 - **Footer.** The **Clean up** button has a fixed width and label and is disabled
   when nothing is selected. The left side shows a summary ("C: gets back ~152 GiB")
   and a plan ("Prunes now, compacts when WSL is idle").
+- **Order of a run.** Prune → ask for admin (starts the Compactor) → wait for idle, or
+  stop Docker Desktop (`docker desktop stop`) → `wsl --shutdown` → the Compactor
+  compacts → `docker desktop start` if ticked, even when compacting failed. Turning down
+  the admin prompt leaves WSL and Docker running. Notifications say when compacting
+  starts and how it all went ("C: got back 135 GiB").
+- **Dry run.** `DiskTray.exe --dry-run` (or `scripts/deploy.sh --dry-run`) runs the same
+  steps but only logs the ones that change something; the Compactor still asks for
+  admin and reports each disk without compacting it. The dialog says so at the top.
 
 ### Volume confidence
 
@@ -146,13 +169,23 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
 `com.docker.compose.volume`. Folder paths come from container labels
 (`devcontainer.local_folder`, `com.docker.compose.project.working_dir`). In order:
 
-1. The path from a container label (exact).
-2. A project → folder cache the app records over time from containers it sees (exact).
-3. A name match inside the "Code folders to search" list (best guess).
+1. The path from a container label (exact). VS Code's `devcontainer.local_folder`
+   (`\\wsl.localhost\Ubuntu\…`) wins; Compose's working folder doesn't say which distro
+   it's in, so that comes from a bind mount's source, or else is the main distro.
+2. A project → folder cache the app records from containers it sees each time the
+   dialog opens, saved as `projects.json` (exact).
+3. A name match inside the "Code folders to search" list (best guess). Until that
+   setting exists, the list is the folders that recorded projects live in.
+
+Folders inside a distro are only looked at (through `\\wsl.localhost`) when the distro is
+already running, since looking would start it. A folder only counts as deleted when its
+parent can be read and lacks it, so a hiccup reading `\\wsl.localhost` can't pre-select
+anything.
 
 | Tag | Pre-selected |
 |---|---|
 | Folder deleted | Yes |
+| Not checked (its distro isn't running) | No |
 | No matching folder in ~/git | No |
 | Folder exists | Never |
 | No project (unnamed volume) | Never |
@@ -186,11 +219,27 @@ are only Alerts (the two levels) and General.
 - `src/DiskTray.App` (`net10.0-windows`, WinExe): tray icons, flyout, Settings,
   Clean up, toasts.
 - `src/DiskTray.Compactor` (`net10.0-windows`, elevated): the only part that
-  needs admin. It shuts down WSL and compacts the VHDX paths it's given (diskpart
-  `compact vdisk`, or `Optimize-VHD` when Hyper-V tools are present), then reports
-  back.
+  needs admin, and it does nothing else. Its manifest requires admin, so starting it
+  shows the admin prompt. It gets the VHDX paths on its command line (fixed once the
+  prompt shows; only full local `.vhdx` paths are accepted), waits for the app to say
+  "go", then compacts each detached disk with Windows' virtual disk API
+  (`CompactVirtualDisk`, what `Optimize-VHD` and diskpart use), which works whatever
+  file system is inside. The app stops Docker Desktop and shuts down WSL itself, without
+  admin, and starts Docker again afterwards, so Docker never runs elevated.
+  - **Talking to the app.** Over a named pipe with a fresh random name that the app
+    creates before starting it (first instance only, so nothing else can take the
+    name), and the app checks that the process on the other end is the one it started.
+    The Compactor sends status and log lines; the app sends "go" or "cancel". It writes
+    no files, since anything it wrote in a folder the user can change could be
+    redirected elsewhere with admin rights. If the app goes away while it's waiting, it
+    stops; once compacting has started it finishes.
+  - It waits up to a minute for WSL to let go of each disk after the shutdown, and
+    reports a disk that stays in use (something started WSL again) without compacting
+    it.
 - **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
-  readings in `usage.json` and what alerts have fired in `alerts.json` there, and logs go to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
+  readings in `usage.json`, what alerts have fired in `alerts.json` and Compose
+  projects' folders in `projects.json` there, and logs go to
+  `%LOCALAPPDATA%\DiskTray\logs\disktray.log` (the Compactor's lines included).
 - **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
   place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
   running while WSL is shut down for a compact.

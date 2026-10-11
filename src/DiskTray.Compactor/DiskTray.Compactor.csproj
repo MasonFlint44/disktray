@@ -1,8 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Small elevated helper: shuts down WSL and compacts the VHDX paths it is given, then reports back. -->
+  <!-- Small elevated helper: compacts the VHDX paths it is given once the app says WSL is shut down, and reports back over a pipe. -->
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- No console window; it talks to the app over a named pipe. -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DiskTray.Compactor</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- LibraryImport generates unsafe marshalling code, and the compact runs on an OVERLAPPED. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />
+  </ItemGroup>
 </Project>

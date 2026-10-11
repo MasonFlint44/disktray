@@ -13,5 +13,22 @@ public partial class FlyoutView : UserControl
 
     public event EventHandler? SettingsClicked;
 
+    public event EventHandler? CleanupClicked;
+
+    public event EventHandler? CancelCleanupClicked;
+
+    /// <summary>Shows how a clean up is going, or hides it when <paramref name="status"/> is null.</summary>
+    public void ShowCleanup(string? status, bool canCancel)
+    {
+        CleanupStatus.Visibility = status is null ? Visibility.Collapsed : Visibility.Visible;
+        CleanupText.Text = status;
+        CancelCleanup.Visibility = canCancel ? Visibility.Visible : Visibility.Collapsed;
+        CleanupButton.IsEnabled = status is null;
+    }
+
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsClicked?.Invoke(this, EventArgs.Empty);
+
+    private void OnCleanupClick(object sender, RoutedEventArgs e) => CleanupClicked?.Invoke(this, EventArgs.Empty);
+
+    private void OnCancelCleanupClick(object sender, RoutedEventArgs e) => CancelCleanupClicked?.Invoke(this, EventArgs.Empty);
 }

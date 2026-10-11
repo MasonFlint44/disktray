@@ -21,7 +21,9 @@ public interface IWslRegistry
 public sealed record WslDistro(string Id, string Name, string VhdxPath)
 {
     /// <summary>Docker Desktop's own distros (docker-desktop, docker-desktop-data).</summary>
-    public bool IsDockerOwned => Name.StartsWith("docker-desktop", StringComparison.OrdinalIgnoreCase);
+    public bool IsDockerOwned => IsDockerOwnedName(Name);
+
+    public static bool IsDockerOwnedName(string name) => name.StartsWith("docker-desktop", StringComparison.OrdinalIgnoreCase);
 }
 
 public static class WslDistros

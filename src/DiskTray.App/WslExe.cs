@@ -1,14 +1,17 @@
-using System.Diagnostics;
 using System.IO;
-using System.Text;
+using DiskTray.Core.Cleanup;
 using DiskTray.Core.Usage;
 
 namespace DiskTray.App;
 
 /// <summary>Runs <c>wsl.exe</c> hidden, with a timeout.</summary>
-internal sealed class WslExe : IWslCommands
+internal sealed class WslExe : IWslCommands, IWslControl
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromMinutes(1);
+
+    // Otherwise wsl.exe writes its own messages as UTF-16.
+    private static readonly Dictionary<string, string> Utf8 = new() { ["WSL_UTF8"] = "1" };
     private static readonly string ExePath = Path.Combine(Environment.SystemDirectory, "wsl.exe");
 
     // The last failure logged for each command, so one that keeps failing logs once.
@@ -28,52 +31,22 @@ internal sealed class WslExe : IWslCommands
     public string? Run(string distro, IReadOnlyList<string> command) =>
         Run(["--distribution", distro, "--exec", .. command], logFailure: true);
 
+    /// <summary>Stops every distro, Docker Desktop's included. Only ever run for a clean up the user started.</summary>
+    public bool Shutdown()
+    {
+        var (_, failure) = HiddenProcess.Run(ExePath, ["--shutdown"], ShutdownTimeout, Utf8);
+        if (failure is not null)
+        {
+            Log.Info($"wsl --shutdown {failure}");
+        }
+
+        return failure is null;
+    }
+
     private string? Run(IReadOnlyList<string> args, bool logFailure)
     {
-        var start = new ProcessStartInfo(ExePath)
-        {
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-        };
-        foreach (string arg in args)
-        {
-            start.ArgumentList.Add(arg);
-        }
-
-        // Otherwise wsl.exe writes its own messages as UTF-16.
-        start.Environment["WSL_UTF8"] = "1";
-
         string commandLine = string.Join(' ', args);
-        string? failure;
-        string? result = null;
-        try
-        {
-            using var process = Process.Start(start) ?? throw new InvalidOperationException("wsl.exe didn't start.");
-            var output = process.StandardOutput.ReadToEndAsync();
-            var error = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(Timeout) || !Task.WaitAll([output, error], Timeout))
-            {
-                process.Kill(entireProcessTree: true);
-                failure = $"timed out after {Timeout.TotalSeconds:0} s";
-            }
-            else if (process.ExitCode != 0)
-            {
-                failure = $"exited with {process.ExitCode}: {(error.Result + output.Result).Trim()}";
-            }
-            else
-            {
-                failure = null;
-                result = output.Result;
-            }
-        }
-        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
-        {
-            failure = e.Message;
-        }
+        var (result, failure) = HiddenProcess.Run(ExePath, args, Timeout, Utf8);
 
         if (logFailure)
         {

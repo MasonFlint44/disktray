@@ -44,6 +44,9 @@ public partial class App : Application
 
     private async Task StartAsync(string[] args)
     {
+        // Clean up only logs what it would do, for trying it out without changing anything.
+        bool dryRun = args.Contains("--dry-run");
+        args = args.Where(a => a != "--dry-run").ToArray();
         switch (args)
         {
             case ["--render-icons", string folder]:
@@ -76,7 +79,7 @@ public partial class App : Application
         _exitWait = ThreadPool.RegisterWaitForSingleObject(
             _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
-        Log.Info($"Started {Environment.ProcessPath}");
+        Log.Info($"Started {Environment.ProcessPath}{(dryRun ? " for clean up dry runs" : "")}");
         var settings = SettingsFile.Load();
         if (!settings.StartupRegistered && StartupRegistration.Set(true))
         {
@@ -86,7 +89,7 @@ public partial class App : Application
 
         Themes.Choose(settings.Theme);
         Notifier.Start();
-        _tray = new TrayController(CreateMonitor(), settings);
+        _tray = new TrayController(CreateMonitor(), settings, dryRun);
         await _tray.StartAsync();
     }
 

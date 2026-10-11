@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using DiskTray.Core;
 using DiskTray.Core.Alerts;
+using DiskTray.Core.Cleanup;
 using DiskTray.Core.Flyout;
 using DiskTray.Core.Settings;
 using DiskTray.Core.Tray;
@@ -14,13 +15,19 @@ using Wpf.Ui.Appearance;
 
 namespace DiskTray.App;
 
-/// <summary>Owns the tray icons, the flyout and the low-space notifications, and refreshes them on a timer.</summary>
+/// <summary>
+/// Owns the tray icons, the flyout, the low-space notifications and the clean up, and
+/// refreshes them on a timer.
+/// </summary>
 internal sealed class TrayController : IDisposable
 {
     /// <summary>How often to check whether it's time for the daily reminder.</summary>
     private static readonly TimeSpan ReminderCheckInterval = TimeSpan.FromMinutes(1);
 
     private readonly DiskMonitor _monitor;
+    private readonly bool _dryRun;
+    private readonly DockerExe _docker = new();
+    private readonly WslExe _wsl = new();
     private readonly DispatcherTimer _reminderTimer;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
@@ -29,15 +36,20 @@ internal sealed class TrayController : IDisposable
     private DiskSnapshot? _snapshot;
     private FlyoutWindow? _flyout;
     private SettingsWindow? _settingsWindow;
+    private CleanupWindow? _cleanupWindow;
+    private CleanupProgress? _cleanupProgress;
+    private CancellationTokenSource? _cleanupCancel;
     private AppSettings _settings;
     private AlertState _alerts = AlertStateFile.Load();
 
     // Why the last refresh failed, shown in every tooltip until one succeeds.
     private string? _problem;
 
-    public TrayController(DiskMonitor monitor, AppSettings settings)
+    /// <param name="dryRun">Clean up only logs what it would do. Set by starting with <c>--dry-run</c>.</param>
+    public TrayController(DiskMonitor monitor, AppSettings settings, bool dryRun)
     {
         _monitor = monitor;
+        _dryRun = dryRun;
         _settings = settings;
         _timer = new DispatcherTimer { Interval = settings.RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
@@ -92,6 +104,8 @@ internal sealed class TrayController : IDisposable
         Notifier.Clicked -= OnNotificationClicked;
         _flyout?.Close();
         _settingsWindow?.Close();
+        _cleanupWindow?.Close();
+        _cleanupCancel?.Cancel();
         foreach (var icon in _icons.Values)
         {
             icon.Dispose();
@@ -156,6 +170,8 @@ internal sealed class TrayController : IDisposable
         {
             _flyout = new FlyoutWindow();
             _flyout.SettingsRequested += (_, _) => OpenSettings();
+            _flyout.CleanupRequested += (_, _) => OpenCleanup();
+            _flyout.CancelCleanupRequested += (_, _) => _cleanupCancel?.Cancel();
         }
 
         // Nothing to show until the first refresh finishes, which takes about a second.
@@ -212,6 +228,109 @@ internal sealed class TrayController : IDisposable
         if (_flyout is not null && _snapshot is not null)
         {
             _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem));
+            _flyout.ShowCleanup(_cleanupProgress?.Text, _cleanupProgress?.CanCancel == true);
+        }
+    }
+
+    private async void OpenCleanup()
+    {
+        if (_cleanupProgress is not null)
+        {
+            // One at a time; the flyout shows how the current one is going.
+            ShowFlyout();
+            return;
+        }
+
+        if (_cleanupWindow is not null)
+        {
+            _cleanupWindow.Activate();
+            return;
+        }
+
+        if (_snapshot is not { } snapshot)
+        {
+            return;
+        }
+
+        var window = new CleanupWindow(snapshot, _dryRun);
+        _cleanupWindow = window;
+        window.Started += request => _ = RunCleanupAsync(request);
+        window.Closed += (_, _) => _cleanupWindow = null;
+        window.Show();
+        window.Activate();
+
+        try
+        {
+            var state = await Task.Run(() => new CleanupScanner(_docker, _wsl).Scan(snapshot));
+            if (_cleanupWindow == window)
+            {
+                window.ShowScan(state);
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Error("Couldn't check what Docker can prune", e);
+            if (_cleanupWindow == window)
+            {
+                window.ShowScan(new CleanupState(snapshot, null, [], new HashSet<string>(), 0));
+            }
+        }
+    }
+
+    private async Task RunCleanupAsync(CleanupRequest request)
+    {
+        using var launcher = new CompactorLauncher();
+        _cleanupCancel = new CancellationTokenSource();
+        bool toldCompacting = false;
+        var progress = new Progress<CleanupProgress>(p =>
+        {
+            _cleanupProgress = p;
+            if (p.Step == CleanupStep.Compacting && !toldCompacting)
+            {
+                toldCompacting = true;
+                Notifier.ShowCleanup(
+                    request.DryRun ? "Compacting (dry run)" : "Compacting now",
+                    request.DryRun ? "Nothing is being changed." : "WSL and Docker can't start until it's done, in about 10–20 minutes.");
+            }
+
+            UpdateCleanupStatus();
+        });
+
+        Log.Info($"Clean up started{(request.DryRun ? " (dry run)" : "")}: build cache {request.BuildCache}, dangling images {request.DanglingImages}, " +
+            $"{request.Volumes.Count} volumes, compact {request.Disks.Count} disks {request.When}, start Docker after {request.StartDockerAfter}");
+        try
+        {
+            var run = new CleanupRun(_docker, _wsl, launcher, (delay, cancel) => Task.Delay(delay, cancel), Log.Info);
+            var result = await run.RunAsync(request, progress, _cleanupCancel.Token);
+            Log.Info($"{result.Title}: {result.Body().Replace('\n', ' ')}");
+            Notifier.ShowCleanup(result.Title, result.Body());
+        }
+        catch (Exception e)
+        {
+            Log.Error("Clean up failed", e);
+            Notifier.ShowCleanup("Clean up didn't finish", e.Message);
+        }
+        finally
+        {
+            _cleanupProgress = null;
+            _cleanupCancel.Dispose();
+            _cleanupCancel = null;
+            UpdateCleanupStatus();
+        }
+
+        await RefreshAsync();
+    }
+
+    private void UpdateCleanupStatus()
+    {
+        _flyout?.ShowCleanup(_cleanupProgress?.Text, _cleanupProgress?.CanCancel == true);
+        foreach (var icon in _icons.Values)
+        {
+            if (icon.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => Equals(m.Tag, CleanupMenuTag)) is { } item)
+            {
+                item.Header = _cleanupProgress?.CanCancel == true ? "Cancel clean up" : "Clean up…";
+                item.IsEnabled = _cleanupProgress is null || _cleanupProgress.CanCancel;
+            }
         }
     }
 
@@ -290,15 +409,29 @@ internal sealed class TrayController : IDisposable
         _images[key] = image;
     }
 
+    private const string CleanupMenuTag = "cleanup";
+
     private ContextMenu BuildMenu()
     {
         var refresh = new MenuItem { Header = "Refresh now" };
         refresh.Click += async (_, _) => await RefreshAsync();
+        var cleanup = new MenuItem { Header = "Clean up…", Tag = CleanupMenuTag };
+        cleanup.Click += (_, _) =>
+        {
+            if (_cleanupProgress?.CanCancel == true)
+            {
+                _cleanupCancel?.Cancel();
+            }
+            else
+            {
+                OpenCleanup();
+            }
+        };
         var settings = new MenuItem { Header = "Settings…" };
         settings.Click += (_, _) => OpenSettings();
         var exit = new MenuItem { Header = "Exit" };
         exit.Click += (_, _) => Application.Current.Shutdown();
-        return new ContextMenu { Items = { refresh, settings, new Separator(), exit } };
+        return new ContextMenu { Items = { refresh, cleanup, settings, new Separator(), exit } };
     }
 
     /// <summary>

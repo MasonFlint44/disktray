@@ -27,6 +27,12 @@ internal partial class FlyoutWindow : FluentWindow
             Dismiss(fromDeactivate: false);
             SettingsRequested?.Invoke(this, EventArgs.Empty);
         };
+        View.CleanupClicked += (_, _) =>
+        {
+            Dismiss(fromDeactivate: false);
+            CleanupRequested?.Invoke(this, EventArgs.Empty);
+        };
+        View.CancelCleanupClicked += (_, _) => CancelCleanupRequested?.Invoke(this, EventArgs.Empty);
         Deactivated += (_, _) => Dismiss(fromDeactivate: true);
         PreviewKeyDown += (_, e) =>
         {
@@ -47,6 +53,10 @@ internal partial class FlyoutWindow : FluentWindow
 
     public event EventHandler? SettingsRequested;
 
+    public event EventHandler? CleanupRequested;
+
+    public event EventHandler? CancelCleanupRequested;
+
     /// <summary>
     /// True right after the flyout lost focus, when a click on a tray icon is the one that
     /// closed it and shouldn't open it again.
@@ -54,6 +64,8 @@ internal partial class FlyoutWindow : FluentWindow
     public bool JustClosed => Environment.TickCount64 - _hiddenAt < ClickThroughTime.TotalMilliseconds;
 
     public void Update(FlyoutModel model) => View.DataContext = model;
+
+    public void ShowCleanup(string? status, bool canCancel) => View.ShowCleanup(status, canCancel);
 
     /// <summary>Opens the flyout by the taskbar, as close to <paramref name="anchor"/> (in screen pixels) as fits.</summary>
     public void ShowAt(NativeMethods.Point anchor)
