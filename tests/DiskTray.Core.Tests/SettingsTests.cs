@@ -18,6 +18,12 @@ public class AppSettingsTests
             DailyReminder = false,
             ReminderTime = new TimeOnly(7, 30),
             StartupRegistered = true,
+            CleanupBuildCache = false,
+            CleanupDanglingImages = false,
+            CleanupDeletedProjectVolumes = false,
+            CleanupCompact = false,
+            CleanupCompactWhen = DiskTray.Core.Cleanup.CompactWhen.RightAway,
+            CleanupStartDocker = false,
         };
 
         Assert.Equal(settings, AppSettings.FromJson(settings.ToJson()));
@@ -30,6 +36,7 @@ public class AppSettingsTests
 
         Assert.Contains("\"theme\": \"dark\"", json);
         Assert.Contains("\"reminderTime\": \"09:00:00\"", json);
+        Assert.Contains("\"cleanupCompactWhen\": \"whenIdle\"", json);
     }
 
     [Theory]
@@ -38,6 +45,7 @@ public class AppSettingsTests
     [InlineData("not json")]
     [InlineData("[1, 2]")]
     [InlineData("""{ "theme": "purple" }""")]
+    [InlineData("""{ "cleanupCompactWhen": "someday" }""")]
     public void Uses_the_defaults_when_the_file_is_unusable(string? json) => Assert.Equal(new AppSettings(), AppSettings.FromJson(json));
 
     [Fact]

@@ -16,14 +16,17 @@ namespace DiskTray.App;
 internal partial class CleanupWindow : FluentWindow
 {
     private readonly bool _dryRun;
+    private readonly CleanupDefaults _defaults;
     private CleanupState _state;
     private readonly HashSet<string> _volumes = new(StringComparer.Ordinal);
     private bool _ready;
     private bool _scanned;
 
-    public CleanupWindow(DiskSnapshot snapshot, bool dryRun)
+    /// <param name="defaults">What to start with, from Settings › Clean up.</param>
+    public CleanupWindow(DiskSnapshot snapshot, CleanupDefaults defaults, bool dryRun)
     {
         _dryRun = dryRun;
+        _defaults = defaults;
         _state = new CleanupState(snapshot, null, [], new HashSet<string>(), 0);
         InitializeComponent();
         Themes.Track(this);
@@ -34,13 +37,14 @@ internal partial class CleanupWindow : FluentWindow
             DryRunBar.Visibility = Visibility.Visible;
         }
 
-        var defaults = CleanupChoices.Defaults(_state);
+        var choices = CleanupChoices.Defaults(_state, _defaults);
+        // Docker hasn't been asked yet; ticked for now so the step doesn't flicker off and on.
         Prune.IsChecked = true;
-        BuildCache.IsChecked = defaults.BuildCache;
-        DanglingImages.IsChecked = defaults.DanglingImages;
-        Compact.IsChecked = defaults.Compact;
-        WhenIdle.IsChecked = defaults.When == CompactWhen.WhenIdle;
-        RightAway.IsChecked = defaults.When == CompactWhen.RightAway;
+        BuildCache.IsChecked = choices.BuildCache;
+        DanglingImages.IsChecked = choices.DanglingImages;
+        Compact.IsChecked = choices.Compact;
+        WhenIdle.IsChecked = choices.When == CompactWhen.WhenIdle;
+        RightAway.IsChecked = choices.When == CompactWhen.RightAway;
         IdleNote.Text = CleanupLayout.IdleNote;
         _ready = true;
         Update();
@@ -54,7 +58,7 @@ internal partial class CleanupWindow : FluentWindow
     {
         _state = state;
         _scanned = true;
-        var defaults = CleanupChoices.Defaults(state);
+        var defaults = CleanupChoices.Defaults(state, _defaults);
         _ready = false;
         Prune.IsChecked = defaults.Prune;
         StartDocker.IsChecked = defaults.StartDockerAfter;

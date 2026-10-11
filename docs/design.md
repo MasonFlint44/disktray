@@ -194,7 +194,7 @@ anything.
 
 Opened from the flyout's gear or the tray menu. Nothing changes until **Save**; **Cancel**
 throws the changes away. Tabs arrive with the features they control, so for now there
-are only Alerts (the two levels) and General.
+are Alerts, Clean up and General.
 
 - **Tray icons:** shape (Pie/Bar); pinned rows with color, name, path
   ("auto-detected" or the chosen path) and "Icon shows"; Add a path….
@@ -203,9 +203,10 @@ are only Alerts (the two levels) and General.
   search" list.
 - **Alerts:** warning and critical levels, notify when free space drops below a
   level, and the daily reminder time.
-- **Clean up:** defaults for prune build cache, remove dangling images,
-  pre-select volumes whose folder is gone, compact afterwards (when idle / right
-  away), and restart Docker Desktop after compacting.
+- **Clean up:** what the Clean up dialog starts with: clear the build cache, remove
+  dangling images, pick unused volumes from projects whose folder is gone (other unused
+  volumes are never picked), compact the disks and when (idle / right away), and start
+  Docker Desktop afterwards if it was running. All on, and when idle, by default.
 - **General:** app theme (System, Light or Dark; default System) for the flyout,
   Settings and Clean up, refresh interval (default 5 min), Start with Windows (on by
   default; the same switch as Task Manager's Startup apps).

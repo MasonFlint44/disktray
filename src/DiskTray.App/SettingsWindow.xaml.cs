@@ -1,13 +1,14 @@
 using System.Windows;
 using DiskTray.Core;
+using DiskTray.Core.Cleanup;
 using DiskTray.Core.Settings;
 using Wpf.Ui.Controls;
 
 namespace DiskTray.App;
 
 /// <summary>
-/// The Settings window. Nothing changes until Save. More tabs (Tray icons, Detection,
-/// Clean up) come with the features they control.
+/// The Settings window. Nothing changes until Save. More tabs (Tray icons, Detection)
+/// come with the features they control.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
@@ -40,6 +41,12 @@ internal partial class SettingsWindow : FluentWindow
         ReminderTime.ItemsSource = times.Select(t => t.ToString("t")).ToList();
         ReminderTime.Tag = times;
         ReminderTime.SelectedIndex = times.IndexOf(settings.ReminderTime);
+        CleanupBuildCache.IsChecked = settings.CleanupBuildCache;
+        CleanupDanglingImages.IsChecked = settings.CleanupDanglingImages;
+        CleanupDeletedProjectVolumes.IsChecked = settings.CleanupDeletedProjectVolumes;
+        CleanupCompact.IsChecked = settings.CleanupCompact;
+        CleanupCompactWhen.SelectedIndex = (int)settings.CleanupCompactWhen;
+        CleanupStartDocker.IsChecked = settings.CleanupStartDocker;
         _ready = true;
         UpdateLevels();
     }
@@ -56,6 +63,12 @@ internal partial class SettingsWindow : FluentWindow
         NotifyOnDrop = NotifyOnDrop.IsChecked == true,
         DailyReminder = DailyReminder.IsChecked == true,
         ReminderTime = ((List<TimeOnly>)ReminderTime.Tag)[Math.Max(0, ReminderTime.SelectedIndex)],
+        CleanupBuildCache = CleanupBuildCache.IsChecked == true,
+        CleanupDanglingImages = CleanupDanglingImages.IsChecked == true,
+        CleanupDeletedProjectVolumes = CleanupDeletedProjectVolumes.IsChecked == true,
+        CleanupCompact = CleanupCompact.IsChecked == true,
+        CleanupCompactWhen = (CompactWhen)Math.Max(0, CleanupCompactWhen.SelectedIndex),
+        CleanupStartDocker = CleanupStartDocker.IsChecked == true,
     };
 
     private void OnLevelChanged(object sender, RoutedEventArgs e)

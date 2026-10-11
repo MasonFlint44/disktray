@@ -390,6 +390,26 @@ public class CleanupLayoutTests
     }
 
     [Fact]
+    public void Starts_with_what_settings_say()
+    {
+        var choices = CleanupChoices.Defaults(
+            State(),
+            new CleanupDefaults(BuildCache: false, PickDeletedProjectVolumes: false, Compact: false, When: CompactWhen.RightAway, StartDockerAfter: false));
+
+        Assert.True(choices.Prune);
+        Assert.False(choices.BuildCache);
+        Assert.True(choices.DanglingImages);
+        Assert.Empty(choices.Volumes);
+        Assert.False(choices.Compact);
+        Assert.Equal(CompactWhen.RightAway, choices.When);
+        Assert.False(choices.StartDockerAfter);
+    }
+
+    [Fact]
+    public void Leaves_prune_off_when_settings_pick_nothing_to_prune() =>
+        Assert.False(CleanupChoices.Defaults(State(), new CleanupDefaults(false, false, false)).Prune);
+
+    [Fact]
     public void Adds_up_the_prune_and_what_compacting_gets_back()
     {
         var model = Build(State());

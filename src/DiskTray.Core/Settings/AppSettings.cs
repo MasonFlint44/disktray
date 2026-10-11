@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DiskTray.Core.Alerts;
+using DiskTray.Core.Cleanup;
 using DiskTray.Core.Tray;
 
 namespace DiskTray.Core.Settings;
@@ -54,6 +55,32 @@ public sealed record AppSettings
     /// </summary>
     public bool StartupRegistered { get; init; }
 
+    /// <summary>Clean up starts with the build cache picked.</summary>
+    public bool CleanupBuildCache { get; init; } = true;
+
+    /// <summary>Clean up starts with dangling images picked.</summary>
+    public bool CleanupDanglingImages { get; init; } = true;
+
+    /// <summary>Clean up starts with the unused volumes of projects whose folder is gone picked.</summary>
+    public bool CleanupDeletedProjectVolumes { get; init; } = true;
+
+    /// <summary>Clean up starts with compacting picked.</summary>
+    public bool CleanupCompact { get; init; } = true;
+
+    public CompactWhen CleanupCompactWhen { get; init; } = CompactWhen.WhenIdle;
+
+    /// <summary>Clean up starts Docker Desktop after compacting, when it was running to begin with.</summary>
+    public bool CleanupStartDocker { get; init; } = true;
+
+    [JsonIgnore]
+    public CleanupDefaults Cleanup => new(
+        CleanupBuildCache,
+        CleanupDanglingImages,
+        CleanupDeletedProjectVolumes,
+        CleanupCompact,
+        CleanupCompactWhen,
+        CleanupStartDocker);
+
     [JsonIgnore]
     public TimeSpan RefreshInterval => TimeSpan.FromMinutes(RefreshMinutes);
 
@@ -101,6 +128,11 @@ public sealed record AppSettings
         if (!Enum.IsDefined(settings.Theme))
         {
             settings = settings with { Theme = Defaults.Theme };
+        }
+
+        if (!Enum.IsDefined(settings.CleanupCompactWhen))
+        {
+            settings = settings with { CleanupCompactWhen = Defaults.CleanupCompactWhen };
         }
 
         if (settings.RefreshMinutes is < 1 or > 24 * 60)

@@ -252,7 +252,7 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        var window = new CleanupWindow(snapshot, _dryRun);
+        var window = new CleanupWindow(snapshot, _settings.Cleanup, _dryRun);
         _cleanupWindow = window;
         window.Started += request => _ = RunCleanupAsync(request);
         window.Closed += (_, _) => _cleanupWindow = null;

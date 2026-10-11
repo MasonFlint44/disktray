@@ -27,6 +27,17 @@ public sealed record CleanupState(
     public bool DockerRunning => Docker is not null;
 }
 
+/// <summary>What the Clean up dialog starts with, from Settings › Clean up.</summary>
+/// <param name="PickDeletedProjectVolumes">Pick the unused volumes of projects whose folder is gone.</param>
+/// <param name="StartDockerAfter">Start Docker Desktop after compacting, when it was running as the dialog opened.</param>
+public sealed record CleanupDefaults(
+    bool BuildCache = true,
+    bool DanglingImages = true,
+    bool PickDeletedProjectVolumes = true,
+    bool Compact = true,
+    CompactWhen When = CompactWhen.WhenIdle,
+    bool StartDockerAfter = true);
+
 /// <summary>What's ticked in the Clean up dialog.</summary>
 public sealed record CleanupChoices(
     bool Prune,
@@ -38,17 +49,24 @@ public sealed record CleanupChoices(
     bool StartDockerAfter)
 {
     /// <summary>
-    /// Both steps on, compacting when idle, with build cache, dangling images and the volumes
-    /// of deleted projects picked. Docker Desktop is started again afterwards if it's running now.
+    /// What Settings says to start with; out of the box, both steps on, compacting when idle,
+    /// with build cache, dangling images and the volumes of deleted projects picked. Pruning
+    /// needs Docker Desktop running, and it's only started again afterwards if it's running now.
     /// </summary>
-    public static CleanupChoices Defaults(CleanupState state) => new(
-        Prune: state.DockerRunning,
-        BuildCache: true,
-        DanglingImages: true,
-        Volumes: state.VolumeGroups.Where(g => g.PreSelected).SelectMany(g => g.Volumes).Select(v => v.Name).ToHashSet(StringComparer.Ordinal),
-        Compact: true,
-        When: CompactWhen.WhenIdle,
-        StartDockerAfter: state.DockerRunning);
+    public static CleanupChoices Defaults(CleanupState state, CleanupDefaults? defaults = null)
+    {
+        defaults ??= new CleanupDefaults();
+        return new(
+            Prune: state.DockerRunning && (defaults.BuildCache || defaults.DanglingImages || defaults.PickDeletedProjectVolumes),
+            BuildCache: defaults.BuildCache,
+            DanglingImages: defaults.DanglingImages,
+            Volumes: defaults.PickDeletedProjectVolumes
+                ? state.VolumeGroups.Where(g => g.PreSelected).SelectMany(g => g.Volumes).Select(v => v.Name).ToHashSet(StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal),
+            Compact: defaults.Compact,
+            When: defaults.When,
+            StartDockerAfter: defaults.StartDockerAfter && state.DockerRunning);
+    }
 }
 
 /// <summary>A disk file to compact, with roughly how big it'll be afterwards when that's known.</summary>
