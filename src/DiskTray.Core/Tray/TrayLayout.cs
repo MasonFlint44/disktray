@@ -53,7 +53,7 @@ public static class TrayLayout
     {
         var color = Palette.For(file.Kind);
         var amounts = file.UsedBytes is { } used
-            ? new[] { (Math.Min(used, file.SizeBytes), color.Main), (file.ReclaimableBytes ?? 0, color.Shade), (drive.FreeBytes, Palette.Free) }
+            ? new[] { (Math.Min(used, file.SizeBytes), color.Main), (file.ReclaimableBytes ?? 0, color.Reclaimable), (drive.FreeBytes, Palette.Free) }
             : new[] { (file.SizeBytes, color.Main), (drive.FreeBytes, Palette.Free) };
 
         string sizeLine = $"{file.Name} · {ByteSize.Format(file.SizeBytes, provider)}";

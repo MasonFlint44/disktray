@@ -39,6 +39,6 @@ internal static class IconPreview
 
     private static TrayIconModel Sample(string key, AlertLevel alert) => new(
         key,
-        new PieChart([new(0.18, Palette.Docker.Main), new(0.55, Palette.Docker.Shade), new(0.27, Palette.Free)], alert),
+        new PieChart([new(0.18, Palette.Docker.Main), new(0.55, Palette.Docker.Reclaimable), new(0.27, Palette.Free)], alert),
         "(sample)");
 }

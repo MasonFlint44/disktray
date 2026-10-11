@@ -6,7 +6,7 @@ DiskTray is a Windows tray app that shows how much of drive C: the WSL and Docke
 virtual disks (VHDX files) take up compared with Windows, and helps get that space
 back. VHDX files grow but never shrink on their own, so the app tracks two numbers
 for each disk file: its size on C:, and how much of it is actually in use. The
-difference is *reclaimable* and is shown as a darker shade of the item's color.
+difference is *reclaimable* and is shown as a lighter tint of the item's color.
 
 ## Tray icons
 
@@ -15,7 +15,7 @@ difference is *reclaimable* and is shown as a darker shade of the item's color.
 - **Shape** (one setting for all icons): Pie, or Bar (vertical bar).
 - **Disk-file icons (Docker, Ubuntu, any pinned path).** The whole circle (or bar)
   is that disk file plus the free space on C:. It shows used (item color),
-  reclaimable (darker shade) and free (dark gray). Today: Docker ≈ 73% (18% used,
+  reclaimable (lighter tint) and free (dark gray). Today: Docker ≈ 73% (18% used,
   55% reclaimable), Ubuntu ≈ 56%.
   - "Icon shows" option: **Disk + free space** (default) or **Share of drive**.
 - **Drive icon.** The whole drive broken down into Docker / Ubuntu / Windows & other /
@@ -38,18 +38,21 @@ difference is *reclaimable* and is shown as a darker shade of the item's color.
 
 ### Colors
 
-| Item | Color | Reclaimable shade |
+| Item | Color | Reclaimable tint |
 |---|---|---|
-| Docker | `#2496ED` | `#14548A` |
-| Ubuntu / WSL | `#E95420` | `#7A2C11` |
+| Docker | `#2496ED` | `#92CAF6` |
+| Ubuntu / WSL | `#E95420` | `#F4AA90` |
 | Windows & other | `#D0D0D0` | — |
 | Free | `#3A3A3A` | — |
 | Warning | `#F0B040` | — |
 | Critical | `#E5534B` | — |
 | Accent | `#4CC2FF` | — |
 
-Each pinned item has a color picker, and its reclaimable shade is derived from the
-chosen color.
+The tint is the item color mixed halfway with white. The free slice next to it is dark
+gray, so a darker shade blended into it (about 1.3 : 1) on both dark and light taskbars;
+the tint stands out (about 6 : 1). The icons look the same on either taskbar theme.
+
+Each pinned item has a color picker, and its tint is derived from the chosen color.
 
 ## Detection
 
@@ -88,7 +91,7 @@ chosen color.
 - A warning banner when below a level, e.g. "51 GiB free (11%) – below your 15% warning".
 - A donut of the whole drive with free space in the center, and a legend listing
   each item's size plus "N used · N reclaimable".
-- "Darker shade = space a disk file is holding but not using."
+- "Lighter shade = space a disk file is holding but not using."
 - "Other large files" (over 2 GiB, not pinned), each with a pin button. Can be toggled.
 - "Reclaimable by compacting" total, and one **Clean up…** button.
 - Footer: "Updated 1:41 PM · checks every 5 min".
@@ -154,7 +157,8 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
 - **Clean up:** defaults for prune build cache, remove dangling images,
   pre-select volumes whose folder is gone, compact afterwards (when idle / right
   away), and restart Docker Desktop after compacting.
-- **General:** refresh interval (default 5 min), Start with Windows.
+- **General:** app theme (System, Light or Dark; default System) for the flyout,
+  Settings and Clean up, refresh interval (default 5 min), Start with Windows.
 
 ## Architecture
 

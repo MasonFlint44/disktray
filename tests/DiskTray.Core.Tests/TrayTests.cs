@@ -34,6 +34,9 @@ public class PieChartTests
         Assert.Equal([new PieSlice(1, Palette.Free)], PieChart.FromAmounts([], AlertLevel.Normal).Slices);
 
     [Fact]
+    public void Mixes_colors() => Assert.Equal(Rgb.FromHex("#F4AA90"), Palette.Wsl.Main.Mix(Rgb.White, 0.5));
+
+    [Fact]
     public void Rejects_bad_colors() => Assert.Throws<FormatException>(() => Rgb.FromHex("#12345"));
 }
 
@@ -79,7 +82,7 @@ public class TrayLayoutTests
 
         var icon = TrayLayout.DiskIcon(file, drive, new AlertThresholds(), CultureInfo.InvariantCulture, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc);
 
-        Assert.Equal([Palette.Docker.Main, Palette.Docker.Shade, Palette.Free], icon.Chart.Slices.Select(s => s.Color));
+        Assert.Equal([Palette.Docker.Main, Rgb.FromHex("#92CAF6"), Palette.Free], icon.Chart.Slices.Select(s => s.Color));
         Assert.Equal(104 / 189.0, icon.Chart.Slices[1].Fraction, 9);
         Assert.StartsWith("Docker data · 138 bytes (104 bytes reclaimable)", icon.ToolTip);
     }
