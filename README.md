@@ -4,7 +4,52 @@ A Windows tray app that shows how much of drive C: your WSL and Docker virtual d
 take up, warns when space runs low, and helps reclaim it (prune Docker, compact
 the VHDX files).
 
+<p align="center">
+  <img src="docs/images/flyout-dark.png" width="360" alt="The DiskTray flyout in dark mode: a donut chart of drive C: split into Docker data, Ubuntu, Windows and other, and free space, with a low-space warning, other large files with pin buttons, and 112 GiB reclaimable by compacting">
+  <img src="docs/images/flyout-light.png" width="360" alt="The same flyout in light mode">
+</p>
+
+Each tray icon is a pie (or bar) of one disk file or drive. The lighter shade is space
+the file holds but isn't using, which compacting gives back. An amber or red ring means
+C: is below your warning level:
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="docs/images/tray-light.png">
+    <img src="docs/images/tray-dark.png" width="370" alt="Tray icons for Docker data, Ubuntu and drive C:, as pies and as bars, each with an amber warning ring">
+  </picture>
+</p>
+
+**Clean up** prunes Docker and compacts the disks. Unused volumes are grouped by the
+project they came from, and only those whose project folder is gone are picked for you.
+By default it waits until you've quit Docker Desktop and closed WSL, so nothing gets
+interrupted.
+
+<p align="center">
+  <img src="docs/images/cleanup.png" width="460" alt="The Clean up dialog: prune Docker's build cache and the unused volumes of a deleted project, and compact the Docker and Ubuntu disks when WSL is idle, getting back about 128 GiB">
+</p>
+
+In **Settings** you choose up to three things to pin to the tray (Docker's disk, a
+distro, a drive, or any file or folder) and their colors, what's detected, alert
+levels and what Clean up starts with.
+
+<p align="center">
+  <img src="docs/images/settings.png" width="560" alt="Settings, Tray icons tab: pie or bar icons, and three pinned items (Docker data, Ubuntu and a VMs folder) with their colors and what each icon shows">
+</p>
+
 See [docs/design.md](docs/design.md) for the design.
+
+## Install
+
+Download the MSI from [Releases](../../releases) and run it. It installs to
+`C:\Program Files\DiskTray` and asks for admin once, so that the part of Clean up that
+runs as admin can't be changed by other programs. It isn't signed, so Windows shows
+"Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
+Uninstall it from **Settings › Apps**.
+
+New tray icons start out in the taskbar's overflow (`^`). To keep them visible, turn
+them on under **Settings → Personalization → Taskbar → Other system tray icons**, or
+drag them onto the taskbar.
 
 ## Layout
 
@@ -28,20 +73,17 @@ dotnet build DiskTray.slnx
 dotnet test
 ```
 
-## Install
+## Building the installer
 
 `scripts/build-msi.sh` builds `artifacts/msi/DiskTray-<version>-x64.msi` (it also needs
 a .NET 6 or later SDK on Windows, since WiX only runs there). GitHub Actions builds the
-same MSI on every push and attaches it to a release for each `v<version>` tag. It
-installs to `C:\Program Files\DiskTray` and asks for admin once.
+same MSI on every push and attaches it to a release for each `v<version>` tag.
 
-For trying changes, `scripts/deploy.sh` publishes a development copy to
-`%LOCALAPPDATA%\Programs\DiskTray` and starts it, closing a running copy first. That copy
-can't compact disks: the Compactor only runs as admin from a folder that needs admin
-to change. `scripts/uninstall.sh` removes it.
+## Development copy
 
-New tray icons start out in the taskbar's overflow (`^`). To keep them visible, turn
-them on under **Settings → Personalization → Taskbar → Other system tray icons**, or
-drag them onto the taskbar.
+`scripts/deploy.sh` publishes a development copy to `%LOCALAPPDATA%\Programs\DiskTray`
+and starts it, closing a running copy first. That copy can't compact disks: the
+Compactor only runs as admin from a folder that needs admin to change.
+`scripts/uninstall.sh` removes it.
 
 Errors are logged to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.

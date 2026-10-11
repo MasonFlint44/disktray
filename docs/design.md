@@ -1,7 +1,5 @@
 # DiskTray design
 
-Mockup: https://claude.ai/artifact/PyZbd4d2EFp8ysLhyV8GHt
-
 DiskTray is a Windows tray app that shows how much of drive C: the WSL and Docker
 virtual disks (VHDX files) take up compared with Windows, and helps get that space
 back. VHDX files grow but never shrink on their own, so the app tracks two numbers
