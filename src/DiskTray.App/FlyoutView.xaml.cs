@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Windows.Controls;
 
 namespace DiskTray.App;
@@ -9,4 +10,8 @@ public partial class FlyoutView : UserControl
     {
         InitializeComponent();
     }
+
+    public event EventHandler? SettingsClicked;
+
+    private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsClicked?.Invoke(this, EventArgs.Empty);
 }

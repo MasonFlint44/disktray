@@ -25,7 +25,8 @@ internal static class IconPreview
     {
         Directory.CreateDirectory(folder);
         var snapshot = monitor.Measure();
-        var models = TrayLayout.Build(snapshot, new AlertThresholds()).ToList();
+        var thresholds = SettingsFile.Load().Thresholds;
+        var models = TrayLayout.Build(snapshot, thresholds).ToList();
         models.Add(Sample("sample-reclaimable", AlertLevel.Normal));
         models.Add(Sample("sample-critical", AlertLevel.Critical));
 
@@ -57,7 +58,7 @@ internal static class IconPreview
         ApplicationThemeManager.Apply(theme, WindowBackdropType.None, updateAccent: false);
         var view = new FlyoutView
         {
-            DataContext = FlyoutLayout.Build(snapshot, new AlertThresholds(), Themes.Current, DateTimeOffset.Now, TimeSpan.FromMinutes(5), problem),
+            DataContext = FlyoutLayout.Build(snapshot, SettingsFile.Load().Thresholds, Themes.Current, DateTimeOffset.Now, TimeSpan.FromMinutes(5), problem),
         };
         var root = new Border { Child = view };
         root.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");

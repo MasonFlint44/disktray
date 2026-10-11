@@ -1,0 +1,122 @@
+<ui:FluentWindow x:Class="DiskTray.App.SettingsWindow"
+                 x:ClassModifier="internal"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 Title="DiskTray Settings"
+                 Width="600"
+                 Height="480"
+                 MinWidth="480"
+                 MinHeight="400"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round"
+                 FontFamily="Segoe UI Variable Text, Segoe UI"
+                 Foreground="{DynamicResource TextFillColorPrimaryBrush}">
+  <ui:FluentWindow.Resources>
+    <Style x:Key="Card" TargetType="Border">
+      <Setter Property="Padding" Value="16,12" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="CornerRadius" Value="6" />
+      <Setter Property="Background" Value="{DynamicResource CardBackgroundFillColorDefaultBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource CardStrokeColorDefaultBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+    </Style>
+    <Style x:Key="Heading" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+    <Style x:Key="Hint" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="{DynamicResource TextFillColorSecondaryBrush}" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </ui:FluentWindow.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <ui:TitleBar Title="DiskTray Settings" ShowMaximize="False" ShowMinimize="False" />
+
+    <TabControl x:Name="Tabs" Grid.Row="1" Margin="16,4,16,0">
+      <TabItem Header="Alerts">
+        <StackPanel Margin="0,16,0,0">
+          <TextBlock Text="Warning levels" Style="{StaticResource Heading}" />
+          <Border Style="{StaticResource Card}">
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="140" />
+                <ColumnDefinition Width="150" />
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="8" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+
+              <Ellipse Width="12" Height="12" Margin="0,0,10,0" Stroke="#F0B040" StrokeThickness="2" VerticalAlignment="Center" />
+              <Label Grid.Column="1" Content="Warning below" Target="{Binding ElementName=Warning}" VerticalAlignment="Center" Padding="0" />
+              <ui:NumberBox x:Name="Warning" Grid.Column="2" Minimum="1" Maximum="50" SmallChange="1" MaxDecimalPlaces="0"
+                            AutomationProperties.Name="Warning below, percent free" ValueChanged="OnLevelChanged" />
+              <TextBlock x:Name="WarningHint" Grid.Column="3" Margin="10,0,0,0" Style="{StaticResource Hint}" />
+
+              <Ellipse Grid.Row="2" Width="12" Height="12" Margin="0,0,10,0" Stroke="#E5534B" StrokeThickness="2" VerticalAlignment="Center" />
+              <Label Grid.Row="2" Grid.Column="1" Content="Critical below" Target="{Binding ElementName=Critical}" VerticalAlignment="Center" Padding="0" />
+              <ui:NumberBox x:Name="Critical" Grid.Row="2" Grid.Column="2" Minimum="0" Maximum="49" SmallChange="1" MaxDecimalPlaces="0"
+                            AutomationProperties.Name="Critical below, percent free" ValueChanged="OnLevelChanged" />
+              <TextBlock x:Name="CriticalHint" Grid.Row="2" Grid.Column="3" Margin="10,0,0,0" Style="{StaticResource Hint}" />
+            </Grid>
+          </Border>
+          <TextBlock x:Name="LevelsProblem" Foreground="{DynamicResource SystemFillColorCriticalBrush}" TextWrapping="Wrap" Visibility="Collapsed" />
+        </StackPanel>
+      </TabItem>
+
+      <TabItem Header="General">
+        <StackPanel Margin="0,16,0,0">
+          <Border Style="{StaticResource Card}">
+            <DockPanel>
+              <ComboBox x:Name="Theme" DockPanel.Dock="Right" Width="200" AutomationProperties.Name="App theme">
+                <ComboBoxItem Content="Use system setting" />
+                <ComboBoxItem Content="Light" />
+                <ComboBoxItem Content="Dark" />
+              </ComboBox>
+              <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="App theme" />
+                <TextBlock Text="For the flyout and Settings. Tray icons don't change." Style="{StaticResource Hint}" TextWrapping="Wrap" />
+              </StackPanel>
+            </DockPanel>
+          </Border>
+          <Border Style="{StaticResource Card}">
+            <DockPanel>
+              <ComboBox x:Name="Refresh" DockPanel.Dock="Right" Width="200" AutomationProperties.Name="Check sizes every" />
+              <TextBlock Text="Check sizes every" VerticalAlignment="Center" />
+            </DockPanel>
+          </Border>
+          <Border Style="{StaticResource Card}">
+            <StackPanel>
+              <CheckBox x:Name="StartWithWindows" Content="Start with Windows" />
+              <TextBlock Margin="28,2,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                         Text="Same as the switch in Task Manager's Startup apps." />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
+
+    <Border Grid.Row="2" Padding="16" Background="{DynamicResource LayerFillColorDefaultBrush}"
+            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="0,1,0,0">
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <ui:Button Content="Cancel" MinWidth="96" IsCancel="True" Click="OnCancel" />
+        <ui:Button x:Name="Save" Content="Save" MinWidth="96" Margin="8,0,0,0" Appearance="Primary" IsDefault="True" Click="OnSave" />
+      </StackPanel>
+    </Border>
+  </Grid>
+</ui:FluentWindow>

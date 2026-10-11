@@ -150,6 +150,10 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
 
 ## Settings (tabs)
 
+Opened from the flyout's gear or the tray menu. Nothing changes until **Save**; **Cancel**
+throws the changes away. Tabs arrive with the features they control, so for now there
+are only Alerts (the two levels) and General.
+
 - **Tray icons:** shape (Pie/Bar); pinned rows with color, name, path
   ("auto-detected" or the chosen path) and "Icon shows"; Add a path….
 - **Detection:** WSL distros, Docker Desktop data disk, daily large-file scan and
@@ -161,7 +165,8 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
   pre-select volumes whose folder is gone, compact afterwards (when idle / right
   away), and restart Docker Desktop after compacting.
 - **General:** app theme (System, Light or Dark; default System) for the flyout,
-  Settings and Clean up, refresh interval (default 5 min), Start with Windows.
+  Settings and Clean up, refresh interval (default 5 min), Start with Windows (on by
+  default; the same switch as Task Manager's Startup apps).
 
 ## Architecture
 
@@ -179,8 +184,13 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
   readings in `usage.json` there, and logs go to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
 - **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
   place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
-  running while WSL is shut down for a compact. Start with Windows uses the Run key or
-  Task Scheduler.
+  running while WSL is shut down for a compact.
+- **Start with Windows.** On first launch the app adds itself to the current user's Run
+  key, turned on, so it's listed in Task Manager's Startup apps. After that, Settings
+  never removes the entry; it flips the same switch Task Manager does
+  (`Explorer\StartupApproved\Run`), so either place can turn it on or off and both
+  agree. It counts as on only when the entry points at this copy. An uninstaller should
+  remove both values.
 - **One copy at a time.** A second launch exits right away. `DiskTray.exe --exit`
   closes the running copy cleanly, so its icons leave the tray (used by
   `scripts/deploy.sh`, and later by updates).

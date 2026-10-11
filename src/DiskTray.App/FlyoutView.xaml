@@ -28,8 +28,15 @@
   </UserControl.Resources>
 
   <StackPanel Margin="20">
-    <TextBlock Text="Disk usage" FontSize="15" FontWeight="SemiBold" />
-    <TextBlock Text="{Binding DriveLine}" Style="{StaticResource Secondary}" Margin="0,2,0,0" />
+    <Grid>
+      <StackPanel>
+        <TextBlock Text="Disk usage" FontSize="15" FontWeight="SemiBold" />
+        <TextBlock Text="{Binding DriveLine}" Style="{StaticResource Secondary}" Margin="0,2,0,0" />
+      </StackPanel>
+      <ui:Button HorizontalAlignment="Right" VerticalAlignment="Center" Width="36" Height="36" Padding="0"
+                 Appearance="Transparent" BorderThickness="0" Icon="{ui:SymbolIcon Settings24}"
+                 ToolTip="Settings" AutomationProperties.Name="Settings" Click="OnSettingsClick" />
+    </Grid>
 
     <ItemsControl ItemsSource="{Binding Banners}" Focusable="False">
       <ItemsControl.ItemTemplate>

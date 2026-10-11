@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Threading;
 using DiskTray.Core;
 using DiskTray.Core.Flyout;
+using DiskTray.Core.Settings;
 using DiskTray.Core.Tray;
 using H.NotifyIcon;
 using Wpf.Ui.Appearance;
@@ -14,24 +15,24 @@ namespace DiskTray.App;
 /// <summary>Owns the tray icons and the flyout, and refreshes them on a timer.</summary>
 internal sealed class TrayController : IDisposable
 {
-    private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
-
     private readonly DiskMonitor _monitor;
-    private readonly AlertThresholds _thresholds = new();
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
     private readonly Dictionary<string, System.Drawing.Icon> _images = [];
     private bool _refreshing;
     private DiskSnapshot? _snapshot;
     private FlyoutWindow? _flyout;
+    private SettingsWindow? _settingsWindow;
+    private AppSettings _settings;
 
     // Why the last refresh failed, shown in every tooltip until one succeeds.
     private string? _problem;
 
-    public TrayController(DiskMonitor monitor)
+    public TrayController(DiskMonitor monitor, AppSettings settings)
     {
         _monitor = monitor;
-        _timer = new DispatcherTimer { Interval = RefreshInterval };
+        _settings = settings;
+        _timer = new DispatcherTimer { Interval = settings.RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
         ApplicationThemeManager.Changed += OnThemeChanged;
     }
@@ -74,6 +75,7 @@ internal sealed class TrayController : IDisposable
         _timer.Stop();
         ApplicationThemeManager.Changed -= OnThemeChanged;
         _flyout?.Close();
+        _settingsWindow?.Close();
         foreach (var icon in _icons.Values)
         {
             icon.Dispose();
@@ -99,7 +101,7 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        var models = TrayLayout.Build(_snapshot, _thresholds);
+        var models = TrayLayout.Build(_snapshot, _settings.Thresholds);
         foreach (var model in models)
         {
             string toolTip = _problem is null ? model.ToolTip : TrayLayout.ToolTip(model.ToolTip, _problem);
@@ -122,7 +124,12 @@ internal sealed class TrayController : IDisposable
 
     private void ToggleFlyout()
     {
-        _flyout ??= new FlyoutWindow();
+        if (_flyout is null)
+        {
+            _flyout = new FlyoutWindow();
+            _flyout.SettingsRequested += (_, _) => OpenSettings();
+        }
+
         if (_flyout.IsVisible)
         {
             _flyout.Dismiss(fromDeactivate: false);
@@ -135,7 +142,6 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        Themes.Apply();
         UpdateFlyout();
         _flyout.ShowAt(NativeMethods.CursorPosition());
     }
@@ -144,8 +150,42 @@ internal sealed class TrayController : IDisposable
     {
         if (_flyout is not null && _snapshot is not null)
         {
-            _flyout.Update(FlyoutLayout.Build(_snapshot, _thresholds, Themes.Current, DateTimeOffset.Now, RefreshInterval, _problem));
+            _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem));
         }
+    }
+
+    private void OpenSettings()
+    {
+        if (_settingsWindow is not null)
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        _settingsWindow = new SettingsWindow(_settings, StartupRegistration.IsEnabled(), _snapshot?.SystemDrive);
+        _settingsWindow.Saved += SaveSettings;
+        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
+        _settingsWindow.Show();
+        _settingsWindow.Activate();
+    }
+
+    private void SaveSettings(AppSettings settings, bool startWithWindows)
+    {
+        SettingsFile.Save(settings);
+        if (startWithWindows != StartupRegistration.IsEnabled())
+        {
+            StartupRegistration.Set(startWithWindows);
+        }
+
+        _settings = settings;
+        // Setting the interval restarts the timer, so only do it when it changed.
+        if (_timer.Interval != settings.RefreshInterval)
+        {
+            _timer.Interval = settings.RefreshInterval;
+        }
+
+        Themes.Choose(settings.Theme);
+        Redraw();
     }
 
     // The donut's gray slices differ between light and dark.
@@ -192,10 +232,11 @@ internal sealed class TrayController : IDisposable
     {
         var refresh = new MenuItem { Header = "Refresh now" };
         refresh.Click += async (_, _) => await RefreshAsync();
-
+        var settings = new MenuItem { Header = "Settings…" };
+        settings.Click += (_, _) => OpenSettings();
         var exit = new MenuItem { Header = "Exit" };
         exit.Click += (_, _) => Application.Current.Shutdown();
-        return new ContextMenu { Items = { refresh, new Separator(), exit } };
+        return new ContextMenu { Items = { refresh, settings, new Separator(), exit } };
     }
 
     /// <summary>

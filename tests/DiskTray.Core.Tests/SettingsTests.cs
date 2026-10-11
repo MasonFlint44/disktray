@@ -1,0 +1,70 @@
+using System.Globalization;
+using DiskTray.Core.Settings;
+
+namespace DiskTray.Core.Tests;
+
+public class AppSettingsTests
+{
+    [Fact]
+    public void Round_trips_through_json()
+    {
+        var settings = new AppSettings { Theme = AppTheme.Light, RefreshMinutes = 15, WarningPercent = 20, CriticalPercent = 8, StartupRegistered = true };
+
+        Assert.Equal(settings, AppSettings.FromJson(settings.ToJson()));
+    }
+
+    [Fact]
+    public void Writes_readable_json() =>
+        Assert.Contains("\"theme\": \"dark\"", new AppSettings { Theme = AppTheme.Dark }.ToJson());
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("[1, 2]")]
+    [InlineData("""{ "theme": "purple" }""")]
+    public void Uses_the_defaults_when_the_file_is_unusable(string? json) => Assert.Equal(new AppSettings(), AppSettings.FromJson(json));
+
+    [Fact]
+    public void Keeps_good_values_and_resets_bad_ones()
+    {
+        var settings = AppSettings.FromJson("""{ "theme": "Dark", "refreshMinutes": 0, "warningPercent": 10, "criticalPercent": 12 }""");
+
+        Assert.Equal(new AppSettings { Theme = AppTheme.Dark }, settings);
+    }
+
+    [Fact]
+    public void Ignores_settings_it_doesnt_know() =>
+        Assert.Equal(new AppSettings { RefreshMinutes = 30 }, AppSettings.FromJson("""{ "refreshMinutes": 30, "iconShape": "bar" }"""));
+
+    [Theory]
+    [InlineData(15, 5, null)]
+    [InlineData(1, 0, null)]
+    [InlineData(0, 0, "The warning level has to be between 1% and 50%.")]
+    [InlineData(51, 5, "The warning level has to be between 1% and 50%.")]
+    [InlineData(15, -1, "The critical level can't be below 0%.")]
+    [InlineData(15, 15, "The critical level has to be below the warning level.")]
+    public void Checks_the_alert_levels(int warning, int critical, string? expected) =>
+        Assert.Equal(expected, new AppSettings { WarningPercent = warning, CriticalPercent = critical }.LevelsProblem());
+
+    [Fact]
+    public void Turns_levels_into_thresholds()
+    {
+        var thresholds = new AppSettings { WarningPercent = 20, CriticalPercent = 8 }.Thresholds;
+
+        Assert.Equal(0.20, thresholds.WarningFreeFraction, 9);
+        Assert.Equal(0.08, thresholds.CriticalFreeFraction, 9);
+    }
+
+    [Fact]
+    public void Shows_levels_as_space_on_the_drive() =>
+        Assert.Equal("≈ 71 GiB", AppSettings.ApproximateSpace(15, new DriveSpace(@"C:\", Machine.DriveTotal, 0), CultureInfo.InvariantCulture));
+
+    [Theory]
+    [InlineData(1, "1 minute")]
+    [InlineData(5, "5 minutes")]
+    [InlineData(60, "1 hour")]
+    [InlineData(120, "2 hours")]
+    public void Describes_refresh_intervals(int minutes, string expected) =>
+        Assert.Equal(expected, AppSettings.DescribeMinutes(minutes, CultureInfo.InvariantCulture));
+}

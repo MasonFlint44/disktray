@@ -2,7 +2,6 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using DiskTray.Core.Flyout;
-using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 
 namespace DiskTray.App;
@@ -22,7 +21,12 @@ internal partial class FlyoutWindow : FluentWindow
     public FlyoutWindow()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => SystemThemeWatcher.Watch(this, WindowBackdropType.Acrylic);
+        Themes.Track(this);
+        View.SettingsClicked += (_, _) =>
+        {
+            Dismiss(fromDeactivate: false);
+            SettingsRequested?.Invoke(this, EventArgs.Empty);
+        };
         Deactivated += (_, _) => Dismiss(fromDeactivate: true);
         PreviewKeyDown += (_, e) =>
         {
@@ -40,6 +44,8 @@ internal partial class FlyoutWindow : FluentWindow
             }
         };
     }
+
+    public event EventHandler? SettingsRequested;
 
     /// <summary>
     /// True right after the flyout lost focus, when a click on a tray icon is the one that

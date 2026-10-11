@@ -77,7 +77,15 @@ public partial class App : Application
             _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
         Log.Info($"Started {Environment.ProcessPath}");
-        _tray = new TrayController(CreateMonitor());
+        var settings = SettingsFile.Load();
+        if (!settings.StartupRegistered && StartupRegistration.Set(true))
+        {
+            settings = settings with { StartupRegistered = true };
+            SettingsFile.Save(settings);
+        }
+
+        Themes.Choose(settings.Theme);
+        _tray = new TrayController(CreateMonitor(), settings);
         await _tray.StartAsync();
     }
 
