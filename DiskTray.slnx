@@ -4,4 +4,7 @@
     <Project Path="src/DiskTray.App/DiskTray.App.csproj" />
     <Project Path="src/DiskTray.Compactor/DiskTray.Compactor.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DiskTray.Core.Tests/DiskTray.Core.Tests.csproj" />
+  </Folder>
 </Solution>

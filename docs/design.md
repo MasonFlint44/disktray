@@ -23,8 +23,17 @@ difference is *reclaimable* and is shown as a darker shade of the item's color.
   - "Icon shows" option: **Drive breakdown** (default) or **Used vs free**.
 - **Warning indicator.** An amber ring or outline when free space is below the
   warning level, red below the critical level.
-- **Tooltip.** For example: `Docker data · 138 GB (104 reclaimable)` /
-  `C: 51 GB free (11%) – below 15% warning`.
+- **Tooltip.** For example: `Docker data · 129 GB (75 GB reclaimable)` /
+  `C: 50 GB free (11%) – below 15% warning`. The drive icon adds a breakdown line
+  (`Docker 129 GB · Ubuntu 60 GB · Other 233 GB`). Windows cuts tooltips off at 127
+  characters, so a long one drops its middle lines first.
+- **Sizes** use Explorer's convention: 1024-based units labelled GB, one decimal below
+  10 and whole numbers from 10 up, so the numbers match what Explorer shows.
+- **Default icons** (until Settings exists): the Docker data disk, the primary WSL
+  distro (WSL's default distro, or else the largest), and drive C:.
+- Icons are drawn at the taskbar's DPI (16 px at 100%, 24 at 150%, 32 at 200%). Each
+  icon's GUID is derived from the exe path, because Windows ties tray GUIDs to the
+  path and remembers pinning by GUID.
 
 ### Colors
 
@@ -43,10 +52,17 @@ chosen color.
 
 ## Detection
 
-- **WSL distros.** Read from the registry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`
-  (each distro's `BasePath` holds its `ext4.vhdx`).
-- **Docker Desktop.** Find `docker_data.vhdx` from Docker Desktop's settings file
-  (default: `%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx`).
+- **WSL distros.** Read from the registry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`.
+  Each distro's disk is `BasePath` (which may start with `\\?\`) plus `VhdFileName`
+  (often empty, meaning `ext4.vhdx`). WSL 1 distros have no disk file and are skipped.
+  Docker Desktop's own distros (`docker-desktop*`) aren't shown as distros.
+- **Docker Desktop.** The data disk is `disk\docker_data.vhdx` under the
+  `CustomWslDistroDir` setting, read from `%APPDATA%\Docker\settings-store.json`
+  (newer versions) or `settings.json` (older), defaulting to `%LOCALAPPDATA%\Docker\wsl`.
+  Older Docker versions kept data in the `docker-desktop-data` distro instead, which is
+  used when `docker_data.vhdx` doesn't exist.
+- **Other drives.** A disk file on another drive is measured against that drive's free
+  space, and isn't part of the C: breakdown.
 - **Large-file scan.** Daily scan of the user folder for files over a threshold
   (default 2 GB) such as `.vhdx`, `.vhd`, `.vmdk` and `.qcow2`. Large files that
   aren't pinned show up in the flyout's "Other large files" section, which can be
@@ -142,9 +158,17 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
   needs admin. It shuts down WSL and compacts the VHDX paths it's given (diskpart
   `compact vdisk`, or `Optimize-VHD` when Hyper-V tools are present), then reports
   back.
-- **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`.
-- **Install location.** The app runs from `%LOCALAPPDATA%\DiskTray\`, not from
-  `\\wsl.localhost\…`, because it has to keep running while WSL is shut down for a
-  compact. Start with Windows uses the Run key or Task Scheduler.
+- **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, and logs go to
+  `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
+- **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
+  place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
+  running while WSL is shut down for a compact. Start with Windows uses the Run key or
+  Task Scheduler.
+- **One copy at a time.** A second launch exits right away. `DiskTray.exe --exit`
+  closes the running copy cleanly, so its icons leave the tray (used by
+  `scripts/deploy.sh`, and later by updates).
+- **`DiskTray.exe --render-icons <folder>`** saves the current icons as PNGs at several
+  sizes plus their tooltips, for checking the drawing without the tray.
 - **Build.** `EnableWindowsTargeting` lets everything build from WSL. The app only
-  runs on Windows.
+  runs on Windows. Tests use xUnit v3 on Microsoft.Testing.Platform (opted in through
+  `global.json`).
