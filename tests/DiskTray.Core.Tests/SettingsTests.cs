@@ -8,14 +8,29 @@ public class AppSettingsTests
     [Fact]
     public void Round_trips_through_json()
     {
-        var settings = new AppSettings { Theme = AppTheme.Light, RefreshMinutes = 15, WarningPercent = 20, CriticalPercent = 8, StartupRegistered = true };
+        var settings = new AppSettings
+        {
+            Theme = AppTheme.Light,
+            RefreshMinutes = 15,
+            WarningPercent = 20,
+            CriticalPercent = 8,
+            NotifyOnDrop = false,
+            DailyReminder = false,
+            ReminderTime = new TimeOnly(7, 30),
+            StartupRegistered = true,
+        };
 
         Assert.Equal(settings, AppSettings.FromJson(settings.ToJson()));
     }
 
     [Fact]
-    public void Writes_readable_json() =>
-        Assert.Contains("\"theme\": \"dark\"", new AppSettings { Theme = AppTheme.Dark }.ToJson());
+    public void Writes_readable_json()
+    {
+        string json = new AppSettings { Theme = AppTheme.Dark }.ToJson();
+
+        Assert.Contains("\"theme\": \"dark\"", json);
+        Assert.Contains("\"reminderTime\": \"09:00:00\"", json);
+    }
 
     [Theory]
     [InlineData(null)]

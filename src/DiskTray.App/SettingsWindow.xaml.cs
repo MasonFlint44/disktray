@@ -32,6 +32,14 @@ internal partial class SettingsWindow : FluentWindow
         Refresh.Tag = minutes;
         Refresh.SelectedIndex = minutes.IndexOf(settings.RefreshMinutes);
         StartWithWindows.IsChecked = startsWithWindows;
+        NotifyOnDrop.IsChecked = settings.NotifyOnDrop;
+        DailyReminder.IsChecked = settings.DailyReminder;
+        // Every half hour, plus a hand-edited time that isn't one of those.
+        var times = Enumerable.Range(0, 48).Select(i => new TimeOnly(i / 2, i % 2 * 30))
+            .Append(settings.ReminderTime).Distinct().Order().ToList();
+        ReminderTime.ItemsSource = times.Select(t => t.ToString("t")).ToList();
+        ReminderTime.Tag = times;
+        ReminderTime.SelectedIndex = times.IndexOf(settings.ReminderTime);
         _ready = true;
         UpdateLevels();
     }
@@ -45,6 +53,9 @@ internal partial class SettingsWindow : FluentWindow
         CriticalPercent = (int)Math.Round(Critical.Value ?? -1),
         Theme = (AppTheme)Math.Max(0, Theme.SelectedIndex),
         RefreshMinutes = ((List<int>)Refresh.Tag)[Math.Max(0, Refresh.SelectedIndex)],
+        NotifyOnDrop = NotifyOnDrop.IsChecked == true,
+        DailyReminder = DailyReminder.IsChecked == true,
+        ReminderTime = ((List<TimeOnly>)ReminderTime.Tag)[Math.Max(0, ReminderTime.SelectedIndex)],
     };
 
     private void OnLevelChanged(object sender, RoutedEventArgs e)

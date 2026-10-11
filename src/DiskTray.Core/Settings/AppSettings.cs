@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DiskTray.Core.Alerts;
 using DiskTray.Core.Tray;
 
 namespace DiskTray.Core.Settings;
@@ -39,6 +40,14 @@ public sealed record AppSettings
     /// <summary>Free space, as a percentage of the drive, below which it turns critical.</summary>
     public int CriticalPercent { get; init; } = 5;
 
+    /// <summary>Notify as soon as free space drops below a level.</summary>
+    public bool NotifyOnDrop { get; init; } = true;
+
+    /// <summary>While it stays low, remind once a day, the first time the user is at the PC after <see cref="ReminderTime"/>.</summary>
+    public bool DailyReminder { get; init; } = true;
+
+    public TimeOnly ReminderTime { get; init; } = new(9, 0);
+
     /// <summary>
     /// Whether the app has added itself to Startup apps yet. It does on first launch, turned
     /// on, and after that leaves the choice to Settings and Task Manager.
@@ -47,6 +56,9 @@ public sealed record AppSettings
 
     [JsonIgnore]
     public TimeSpan RefreshInterval => TimeSpan.FromMinutes(RefreshMinutes);
+
+    [JsonIgnore]
+    public AlertOptions Alerts => new(NotifyOnDrop, DailyReminder, ReminderTime);
 
     [JsonIgnore]
     public AlertThresholds Thresholds => new(WarningPercent / 100.0, CriticalPercent / 100.0);

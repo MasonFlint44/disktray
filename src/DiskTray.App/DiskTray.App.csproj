@@ -2,7 +2,9 @@
   <!-- WPF tray app: icons, flyout, Settings, Clean up, toasts. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- The Windows 10 SDK version brings in the WinRT APIs that toast notifications use. -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
     <AssemblyName>DiskTray</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -14,6 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon.Wpf" Version="2.4.1" />
+    <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
 </Project>

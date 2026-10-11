@@ -102,11 +102,17 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
 ## Alerts
 
 - **Warning** at 15% free (≈71 GiB on a 472 GiB drive). **Critical** at 5% (≈24 GiB).
-- A toast fires as soon as free space drops below a level.
+- A toast fires as soon as free space drops below a level, e.g. "Drive C: is getting
+  full · 49 GiB free (10%) – below your 15% warning level · 118 GiB is reclaimable by
+  compacting."
 - While still low, a daily reminder shows the first time the user is active
-  (activity, unlock or login) after a set time (default 9:00 AM).
-- An alert re-arms only after free space climbs a few GB above its level, so it
-  doesn't flap.
+  (keyboard or mouse in the last minute or so, unlock or login) after a set time
+  (default 9:00 AM). A drop toast counts as that day's reminder.
+- An alert re-arms only after free space climbs 3 GiB above its level, so it doesn't
+  flap.
+- Each toast replaces the last, so the notification center holds at most one.
+  Clicking it opens the flyout.
+- What has fired is kept in `alerts.json`, so restarting doesn't notify again.
 - Do Not Disturb is respected (Windows toasts handle this).
 
 ## Clean up dialog
@@ -181,7 +187,7 @@ are only Alerts (the two levels) and General.
   `compact vdisk`, or `Optimize-VHD` when Hyper-V tools are present), then reports
   back.
 - **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
-  readings in `usage.json` there, and logs go to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
+  readings in `usage.json` and what alerts have fired in `alerts.json` there, and logs go to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
 - **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
   place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
   running while WSL is shut down for a compact.
@@ -190,7 +196,8 @@ are only Alerts (the two levels) and General.
   never removes the entry; it flips the same switch Task Manager does
   (`Explorer\StartupApproved\Run`), so either place can turn it on or off and both
   agree. It counts as on only when the entry points at this copy. An uninstaller should
-  remove both values.
+  remove both values, and the toast registration that Windows notifications need for
+  an unpackaged app.
 - **One copy at a time.** A second launch exits right away. `DiskTray.exe --exit`
   closes the running copy cleanly, so its icons leave the tray (used by
   `scripts/deploy.sh`, and later by updates).

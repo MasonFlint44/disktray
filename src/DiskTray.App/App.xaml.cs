@@ -85,6 +85,7 @@ public partial class App : Application
         }
 
         Themes.Choose(settings.Theme);
+        Notifier.Start();
         _tray = new TrayController(CreateMonitor(), settings);
         await _tray.StartAsync();
     }

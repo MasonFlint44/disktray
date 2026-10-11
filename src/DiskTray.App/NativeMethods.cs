@@ -50,6 +50,22 @@ internal static partial class NativeMethods
         public uint Flags;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct LastInputInfo
+    {
+        public int Size;
+        public uint Time;
+    }
+
+    /// <summary>How long since the user last used the keyboard or mouse.</summary>
+    public static TimeSpan IdleTime()
+    {
+        var info = new LastInputInfo { Size = Marshal.SizeOf<LastInputInfo>() };
+        return GetLastInputInfo(ref info)
+            ? TimeSpan.FromMilliseconds(unchecked((uint)Environment.TickCount - info.Time))
+            : TimeSpan.Zero;
+    }
+
     /// <summary>Where the mouse is, in screen pixels.</summary>
     public static Point CursorPosition() => GetCursorPos(out var point) ? point : default;
 
@@ -67,6 +83,10 @@ internal static partial class NativeMethods
 
     public static void MoveWindow(nint hwnd, int x, int y) =>
         SetWindowPos(hwnd, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetLastInputInfo(ref LastInputInfo info);
 
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

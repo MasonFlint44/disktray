@@ -4,18 +4,24 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using DiskTray.Core;
+using DiskTray.Core.Alerts;
 using DiskTray.Core.Flyout;
 using DiskTray.Core.Settings;
 using DiskTray.Core.Tray;
 using H.NotifyIcon;
+using Microsoft.Win32;
 using Wpf.Ui.Appearance;
 
 namespace DiskTray.App;
 
-/// <summary>Owns the tray icons and the flyout, and refreshes them on a timer.</summary>
+/// <summary>Owns the tray icons, the flyout and the low-space notifications, and refreshes them on a timer.</summary>
 internal sealed class TrayController : IDisposable
 {
+    /// <summary>How often to check whether it's time for the daily reminder.</summary>
+    private static readonly TimeSpan ReminderCheckInterval = TimeSpan.FromMinutes(1);
+
     private readonly DiskMonitor _monitor;
+    private readonly DispatcherTimer _reminderTimer;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
     private readonly Dictionary<string, System.Drawing.Icon> _images = [];
@@ -24,6 +30,7 @@ internal sealed class TrayController : IDisposable
     private FlyoutWindow? _flyout;
     private SettingsWindow? _settingsWindow;
     private AppSettings _settings;
+    private AlertState _alerts = AlertStateFile.Load();
 
     // Why the last refresh failed, shown in every tooltip until one succeeds.
     private string? _problem;
@@ -34,13 +41,18 @@ internal sealed class TrayController : IDisposable
         _settings = settings;
         _timer = new DispatcherTimer { Interval = settings.RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
+        _reminderTimer = new DispatcherTimer { Interval = ReminderCheckInterval };
+        _reminderTimer.Tick += (_, _) => CheckAlerts(UserIsActive());
         ApplicationThemeManager.Changed += OnThemeChanged;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
+        Notifier.Clicked += OnNotificationClicked;
     }
 
     public async Task StartAsync()
     {
         await RefreshAsync();
         _timer.Start();
+        _reminderTimer.Start();
     }
 
     public async Task RefreshAsync()
@@ -56,6 +68,7 @@ internal sealed class TrayController : IDisposable
             _snapshot = await Task.Run(_monitor.Measure);
             _problem = null;
             Redraw();
+            CheckAlerts(UserIsActive());
         }
         catch (Exception e)
         {
@@ -73,7 +86,10 @@ internal sealed class TrayController : IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        _reminderTimer.Stop();
         ApplicationThemeManager.Changed -= OnThemeChanged;
+        SystemEvents.SessionSwitch -= OnSessionSwitch;
+        Notifier.Clicked -= OnNotificationClicked;
         _flyout?.Close();
         _settingsWindow?.Close();
         foreach (var icon in _icons.Values)
@@ -124,20 +140,26 @@ internal sealed class TrayController : IDisposable
 
     private void ToggleFlyout()
     {
+        if (_flyout?.IsVisible == true)
+        {
+            _flyout.Dismiss(fromDeactivate: false);
+        }
+        else if (_flyout?.JustClosed != true)
+        {
+            ShowFlyout();
+        }
+    }
+
+    private void ShowFlyout()
+    {
         if (_flyout is null)
         {
             _flyout = new FlyoutWindow();
             _flyout.SettingsRequested += (_, _) => OpenSettings();
         }
 
-        if (_flyout.IsVisible)
-        {
-            _flyout.Dismiss(fromDeactivate: false);
-            return;
-        }
-
         // Nothing to show until the first refresh finishes, which takes about a second.
-        if (_flyout.JustClosed || _snapshot is null)
+        if (_snapshot is null)
         {
             return;
         }
@@ -145,6 +167,43 @@ internal sealed class TrayController : IDisposable
         UpdateFlyout();
         _flyout.ShowAt(NativeMethods.CursorPosition());
     }
+
+    private void CheckAlerts(bool userActive)
+    {
+        if (_snapshot is null)
+        {
+            return;
+        }
+
+        var (state, toast) = AlertRules.Check(_alerts, _snapshot, _settings.Thresholds, _settings.Alerts, DateTimeOffset.Now, userActive);
+        if (state != _alerts)
+        {
+            _alerts = state;
+            AlertStateFile.Save(state);
+        }
+
+        if (toast is not null)
+        {
+            Notifier.Show(toast);
+        }
+    }
+
+    /// <summary>
+    /// Whether the user has used the keyboard or mouse since the last reminder check, so the
+    /// reminder shows when they're at the PC rather than to an empty room.
+    /// </summary>
+    private static bool UserIsActive() => NativeMethods.IdleTime() < ReminderCheckInterval + TimeSpan.FromSeconds(30);
+
+    // Unlocking or signing in counts as being at the PC.
+    private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason is SessionSwitchReason.SessionUnlock or SessionSwitchReason.SessionLogon or SessionSwitchReason.ConsoleConnect)
+        {
+            Application.Current?.Dispatcher.BeginInvoke(() => CheckAlerts(userActive: true));
+        }
+    }
+
+    private void OnNotificationClicked(object? sender, EventArgs e) => ShowFlyout();
 
     private void UpdateFlyout()
     {
@@ -186,6 +245,7 @@ internal sealed class TrayController : IDisposable
 
         Themes.Choose(settings.Theme);
         Redraw();
+        CheckAlerts(UserIsActive());
     }
 
     // The donut's gray slices differ between light and dark.
