@@ -277,6 +277,21 @@ internal partial class SettingsWindow
         }
     }
 
+    /// <summary>
+    /// Adds a pin made from the flyout while this window is open, so Save keeps it. False
+    /// when the list here is already full, and the flyout's pin shouldn't happen either.
+    /// </summary>
+    internal bool AddFromFlyout(TrayPin pin)
+    {
+        if (_pins.Any(p => p.SameItem(pin) || SameDrive(p, pin)))
+        {
+            return true;
+        }
+
+        Add(pin);
+        return _pins.Contains(pin);
+    }
+
     private void Add(TrayPin pin)
     {
         if (_pins.Count < TrayPin.MaxPins && !_pins.Any(p => p.SameItem(pin) || SameDrive(p, pin)))

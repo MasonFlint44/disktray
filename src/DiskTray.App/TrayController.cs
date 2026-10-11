@@ -255,13 +255,22 @@ internal sealed class TrayController : IDisposable
     /// <summary>Pins a file from "Other large files" to the tray.</summary>
     private void Pin(string path)
     {
+        var pin = new TrayPin(PinKind.Path, path);
         if (_settings.Pins.Count >= TrayPin.MaxPins)
         {
             return;
         }
 
+        // An open Settings window saves its own list of pins, so it has to get this one too,
+        // or its Save would drop it. If its list is full, it can't.
+        if (_settingsWindow is { } open && !open.AddFromFlyout(pin))
+        {
+            Log.Info($"Didn't pin {path}: Settings is open with every slot taken");
+            return;
+        }
+
         Log.Info($"Pinned {path} from the flyout");
-        SaveSettings(_settings with { Pins = TrayPin.Clean([.. _settings.Pins, new TrayPin(PinKind.Path, path)]) }, StartupRegistration.IsEnabled());
+        SaveSettings(_settings with { Pins = TrayPin.Clean([.. _settings.Pins, pin]) }, StartupRegistration.IsEnabled());
     }
 
     private async void OpenCleanup()
