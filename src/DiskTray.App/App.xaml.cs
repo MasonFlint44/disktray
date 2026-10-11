@@ -54,15 +54,15 @@ public partial class App : Application
                 Shutdown();
                 return;
             case ["--exit"]:
-                // Lets scripts and installers close the running copy cleanly, so its icons
-                // leave the tray instead of lingering until hovered.
-                CloseRunningCopy(wait: false);
+                // Lets scripts and the installer close the running copy cleanly, so its icons
+                // leave the tray instead of lingering until hovered, and its files can be
+                // replaced once this returns.
+                CloseRunningCopy(wait: true);
                 Shutdown();
                 return;
-            case ["--uninstall", .. var options] when options.All(o => o == "--quiet"):
-                // Settings › Apps runs this.
-                Themes.Choose(SettingsFile.Load().Theme);
-                await Uninstaller.RunAsync(quiet: options.Length > 0, () => CloseRunningCopy(wait: true));
+            case ["--remove-user-data"]:
+                // The installer runs this when DiskTray is uninstalled.
+                Uninstaller.RemoveUserData(() => CloseRunningCopy(wait: true));
                 Shutdown();
                 return;
         }
@@ -81,7 +81,7 @@ public partial class App : Application
             _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
         Log.Info($"Started {Environment.ProcessPath}{(dryRun ? " for clean up dry runs" : "")}");
-        Uninstaller.Register();
+        Uninstaller.RemoveOldEntry();
         var settings = SettingsFile.Load();
         if (!settings.StartupRegistered && StartupRegistration.Set(true))
         {

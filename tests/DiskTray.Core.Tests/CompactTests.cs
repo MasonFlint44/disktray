@@ -307,11 +307,11 @@ internal sealed class FakeLauncher(List<string> events) : ICompactorLauncher
 
     public bool HasExited { get; set; }
 
-    public bool Start(IReadOnlyList<string> disks, bool dryRun)
+    public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
         events.Add(Approve ? "admin granted" : "admin refused");
         Started = Approve ? new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun) : null;
-        return Approve;
+        return Approve ? null : "admin permission wasn't given";
     }
 
     public CompactStatus? ReadStatus() => Script.Count > 0 ? Script.Dequeue() : Final;

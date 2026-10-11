@@ -262,6 +262,16 @@ General.
     no files, since anything it wrote in a folder the user can change could be
     redirected elsewhere with admin rights. If the app goes away while it's waiting, it
     stops; once compacting has started it finishes.
+  - **Only from an admin-only folder.** Before the admin prompt, the app checks that it
+    can't change the Compactor itself: write, replace or re-permission the exe or
+    anything in its folder, add a file there (a planted DLL would load into it), or move
+    the folder or one above it. It tests this by opening each with those rights and
+    closing again. The installer's `Program Files\DiskTray` passes. A copy in
+    `%LOCALAPPDATA%` doesn't, because anything running as the user could swap it before
+    the prompt is answered, so Clean up still prunes there but won't compact. (Skipped
+    when DiskTray itself runs as admin, since there's nothing to protect then.)
+  - It ignores `DOTNET_STARTUP_HOOKS`, which would otherwise load a DLL named in the
+    user's environment into it.
   - It waits up to a minute for WSL to let go of each disk after the shutdown, and
     reports a disk that stays in use (something started WSL again) without compacting
     it.
@@ -270,27 +280,39 @@ General.
   projects' folders in `projects.json` and the last large-file scan in
   `largefiles.json` there, and logs go to
   `%LOCALAPPDATA%\DiskTray\logs\disktray.log` (the Compactor's lines included).
-- **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
-  place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep
-  running while WSL is shut down for a compact.
+- **Installer.** A per-machine MSI built with WiX 5 (`installer/`), which installs to
+  `C:\Program Files\DiskTray`, so only admins can change what Clean up runs as admin. It
+  asks for admin once, at install. The app and Compactor are published self-contained, so
+  nobody needs .NET installed (about 56 MB). It adds a Start menu shortcut and lists
+  DiskTray in Settings › Apps, with Uninstall only. Unsigned, so a downloaded copy gets
+  SmartScreen's "Windows protected your PC" until it's known. Running as the user doing
+  the install, it:
+  - closes the running copy before an upgrade (`DiskTray.exe --exit`, which waits);
+  - starts DiskTray afterwards through Explorer, so it never runs as admin even when the
+    install did (not on silent installs);
+  - on an uninstall (not an upgrade), runs `DiskTray.exe --remove-user-data`, which closes
+    the running copy and removes what DiskTray added for that user: the Run and Startup
+    apps values, the toast registration Windows notifications need for an unpackaged
+    app, and `%LOCALAPPDATA%\DiskTray`. Other users' settings stay behind.
+
+  `scripts/build-msi.sh` builds it from WSL into `artifacts/msi/` (WiX only runs on
+  Windows, so it uses the Windows dotnet, .NET 6 or later). The GitHub Actions workflow
+  runs the tests, builds the MSI on every push, and on a `v1.2.3` tag matching
+  `Version` in `Directory.Build.props` publishes a release with it attached.
+- **Development copy.** `scripts/deploy.sh` copies a framework-dependent build to
+  `%LOCALAPPDATA%\Programs\DiskTray\` and starts it, for trying changes quickly; it isn't
+  listed in Settings › Apps and can't compact (see above). `scripts/uninstall.sh` removes
+  it. Either way the app runs from a Windows folder, not `\\wsl.localhost\…`, because it
+  has to keep running while WSL is shut down for a compact. Builds before the installer
+  listed themselves under `HKCU\…\Uninstall\DiskTray`; the app removes that entry.
 - **Start with Windows.** On first launch the app adds itself to the current user's Run
   key, turned on, so it's listed in Task Manager's Startup apps. After that, Settings
   never removes the entry; it flips the same switch Task Manager does
   (`Explorer\StartupApproved\Run`), so either place can turn it on or off and both
   agree. It counts as on only when the entry points at this copy.
-- **Settings › Apps and uninstalling.** There's no installer: `scripts/deploy.sh` copies
-  the app in. On each start, the installed copy (only that one, not a build elsewhere)
-  writes its entry under `HKCU\…\Uninstall\DiskTray` (name, icon, version, size, folder,
-  first install date) so it shows in Settings › Apps with an **Uninstall** button.
-  `DiskTray.exe --uninstall` (what that button runs) asks first, closes the running copy,
-  then removes the Run and Startup apps values, the toast registration Windows
-  notifications need for an unpackaged app, the Settings › Apps entry and
-  `%LOCALAPPDATA%\DiskTray`. A hidden `cmd` deletes `%LOCALAPPDATA%\Programs\DiskTray`
-  a few seconds after DiskTray exits; it only ever deletes that folder.
-  `--uninstall --quiet` (and `scripts/uninstall.sh`) skips the questions.
 - **One copy at a time.** A second launch exits right away. `DiskTray.exe --exit`
   closes the running copy cleanly, so its icons leave the tray (used by
-  `scripts/deploy.sh`, and later by updates).
+  `scripts/deploy.sh` and the installer).
 - **`DiskTray.exe --render-icons <folder>`** saves the current icons as PNGs at several
   sizes plus their tooltips, the flyout and the notification picture in light and dark,
   and the app icon, for checking the drawing without the tray.

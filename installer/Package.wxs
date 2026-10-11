@@ -1,0 +1,61 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Never change the UpgradeCode: it's how a new version finds and replaces the old one. -->
+  <Package Name="DiskTray" Manufacturer="DiskTray" Version="$(Version)" Scope="perMachine"
+           UpgradeCode="e048c4d3-96be-41df-9c0a-9ae7059d2735">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of DiskTray is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Settings › Apps: the icon, and only Uninstall (there's nothing to change or repair). -->
+    <Icon Id="DiskTray.ico" SourceFile="..\src\DiskTray.App\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="DiskTray.ico" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="DiskTray" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <!-- DiskTray.exe on its own, so the Start menu shortcut can belong to it. -->
+      <Component>
+        <File Source="$(PublishDir)DiskTray.exe">
+          <Shortcut Name="DiskTray" Description="WSL and Docker disk usage" Directory="ProgramMenuFolder"
+                    WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+        </File>
+      </Component>
+      <Files Include="$(PublishDir)**">
+        <Exclude Files="$(PublishDir)DiskTray.exe" />
+        <Exclude Files="$(PublishDir)**\*.pdb" />
+      </Files>
+    </ComponentGroup>
+
+    <Feature Id="Main">
+      <ComponentGroupRef Id="AppFiles" />
+    </Feature>
+
+    <!-- These run as the user doing the install, without admin rights, in their session. -->
+
+    <!-- On an uninstall (not an upgrade): close DiskTray and remove the user's settings,
+         Startup apps entry and notification registration, which only DiskTray knows about. -->
+    <CustomAction Id="RemoveUserData" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --remove-user-data" />
+    <!-- On an upgrade or a repair: close the running copy so its files can be replaced. -->
+    <CustomAction Id="CloseDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --exit" />
+    <!-- After installing, start it the way Explorer does, so it never runs as admin even
+         when the install did. Skipped for silent installs, which have no one signed in to see it. -->
+    <CustomAction Id="StartDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
+                  ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RemoveUserData" Before="InstallValidate"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="CloseDiskTray" After="RemoveUserData"
+              Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="StartDiskTray" After="InstallFinalize"
+              Condition="NOT Installed AND UILevel &gt; 2" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

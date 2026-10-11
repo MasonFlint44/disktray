@@ -26,9 +26,10 @@ public interface ICompactorLauncher
 {
     /// <summary>
     /// Opens a fresh pipe and starts the Compactor with admin rights, passing it the pipe's
-    /// name. False when the user said no or it didn't start.
+    /// name. Null once it has started; otherwise why it didn't, to follow "because", such as
+    /// "admin permission wasn't given".
     /// </summary>
-    bool Start(IReadOnlyList<string> disks, bool dryRun);
+    string? Start(IReadOnlyList<string> disks, bool dryRun);
 
     /// <summary>Whether the Compactor has ended or hung up.</summary>
     bool HasExited { get; }
@@ -196,14 +197,14 @@ public sealed class CleanupRun(
             new(request, pruned, pruneProblems, status, problem, cancelled);
 
         progress.Report(new CleanupProgress(CleanupStep.AskingForAdmin, "Waiting for admin permission to compact"));
-        if (!compactor.Start(request.Disks.Select(d => d.File.Path).ToList(), request.DryRun))
+        if (compactor.Start(request.Disks.Select(d => d.File.Path).ToList(), request.DryRun) is { } notStarted)
         {
-            return Result(null, "Nothing was compacted, because admin permission wasn't given.");
+            return Result(null, $"Nothing was compacted, because {notStarted}.");
         }
 
-        if (await WaitForCompactorAsync() is { } notStarted)
+        if (await WaitForCompactorAsync() is { } noStatus)
         {
-            return Result(compactor.ReadStatus(), notStarted);
+            return Result(compactor.ReadStatus(), noStatus);
         }
 
         if (request.When == CompactWhen.WhenIdle)

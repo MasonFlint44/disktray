@@ -9,5 +9,7 @@
     <!-- Shown in Settings › Apps. -->
     <Version>0.1.0</Version>
     <Product>DiskTray</Product>
+    <!-- DiskTray is in English, so leave out the runtime's translated messages. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 </Project>

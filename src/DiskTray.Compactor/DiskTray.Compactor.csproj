@@ -8,6 +8,8 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- LibraryImport generates unsafe marshalling code, and the compact runs on an OVERLAPPED. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- It runs as admin, so it ignores DOTNET_STARTUP_HOOKS, which would load another DLL into it. -->
+    <StartupHookSupport>false</StartupHookSupport>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />

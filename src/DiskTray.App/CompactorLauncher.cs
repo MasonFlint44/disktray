@@ -27,12 +27,19 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
 
     public bool HasExited => _hungUp || _process is null || HasProcessExited(_process);
 
-    public bool Start(IReadOnlyList<string> disks, bool dryRun)
+    public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
         if (!File.Exists(ExePath))
         {
             Log.Info($"Can't compact: {ExePath} is missing");
-            return false;
+            return "DiskTray.Compactor.exe is missing";
+        }
+
+        // Before the admin prompt, so a Compactor something else could have swapped never gets it.
+        if (ProtectedFolder.Problem(ExePath) is { } unprotected)
+        {
+            Log.Info($"Can't compact: {unprotected}");
+            return unprotected;
         }
 
         var args = new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun);
@@ -57,24 +64,24 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         {
             Log.Info("Admin permission to compact wasn't given");
             Close();
-            return false;
+            return "admin permission wasn't given";
         }
         catch (Win32Exception e)
         {
             Log.Error("Couldn't start the Compactor", e);
             Close();
-            return false;
+            return "the Compactor didn't start";
         }
 
         if (_process is null)
         {
             Close();
-            return false;
+            return "the Compactor didn't start";
         }
 
         Log.Info($"Started the Compactor ({_process.Id}){(dryRun ? " for a dry run" : "")}: {string.Join(", ", disks)}");
         _ = Task.Run(() => ListenAsync(_pipe, _process));
-        return true;
+        return null;
     }
 
     public CompactStatus? ReadStatus()

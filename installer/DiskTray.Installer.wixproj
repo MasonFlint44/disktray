@@ -1,0 +1,15 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- The per-machine MSI: DiskTray in Program Files, where only admins can change the
+       Compactor that Clean up runs as admin. Built by scripts/build-msi.sh and the
+       GitHub Actions workflow, after both apps are published to PublishDir. -->
+  <PropertyGroup>
+    <OutputName>DiskTray-$(Version)-x64</OutputName>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <OutputPath>$(MSBuildThisFileDirectory)..\artifacts\msi\</OutputPath>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishDir>
+    <DefineConstants>PublishDir=$(PublishDir);Version=$(Version)</DefineConstants>
+    <!-- Both treat the Start menu as per-user, so they want the shortcut keyed in HKCU. It's
+         the all-users Start menu here (ALLUSERS=1), owned by DiskTray.exe's component. -->
+    <SuppressIces>ICE43;ICE57</SuppressIces>
+  </PropertyGroup>
+</Project>

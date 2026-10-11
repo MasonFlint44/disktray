@@ -1,0 +1,62 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # The tests cover DiskTray.Core, which is plain .NET, so they run where development does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet test
+
+  installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
+          if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match Version $version in Directory.Build.props" }
+      - name: Publish
+        run: |
+          dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained -o artifacts/publish
+          dotnet publish src/DiskTray.Compactor -c Release -r win-x64 --self-contained -o artifacts/publish
+      - name: Build the MSI
+        run: dotnet build installer -c Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msi
+          path: artifacts/msi/*.msi
+          if-no-files-found: error
+
+  release:
+    # A v1.2.3 tag publishes a GitHub release with the MSI attached.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, installer]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: msi
+      - run: gh release create "$GITHUB_REF_NAME" *.msi --repo "$GITHUB_REPOSITORY" --title "DiskTray ${GITHUB_REF_NAME#v}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
