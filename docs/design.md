@@ -277,9 +277,17 @@ General.
   key, turned on, so it's listed in Task Manager's Startup apps. After that, Settings
   never removes the entry; it flips the same switch Task Manager does
   (`Explorer\StartupApproved\Run`), so either place can turn it on or off and both
-  agree. It counts as on only when the entry points at this copy. An uninstaller should
-  remove both values, and the toast registration that Windows notifications need for
-  an unpackaged app.
+  agree. It counts as on only when the entry points at this copy.
+- **Settings › Apps and uninstalling.** There's no installer: `scripts/deploy.sh` copies
+  the app in. On each start, the installed copy (only that one, not a build elsewhere)
+  writes its entry under `HKCU\…\Uninstall\DiskTray` (name, icon, version, size, folder,
+  first install date) so it shows in Settings › Apps with an **Uninstall** button.
+  `DiskTray.exe --uninstall` (what that button runs) asks first, closes the running copy,
+  then removes the Run and Startup apps values, the toast registration Windows
+  notifications need for an unpackaged app, the Settings › Apps entry and
+  `%LOCALAPPDATA%\DiskTray`. A hidden `cmd` deletes `%LOCALAPPDATA%\Programs\DiskTray`
+  a few seconds after DiskTray exits; it only ever deletes that folder.
+  `--uninstall --quiet` (and `scripts/uninstall.sh`) skips the questions.
 - **One copy at a time.** A second launch exits right away. `DiskTray.exe --exit`
   closes the running copy cleanly, so its icons leave the tray (used by
   `scripts/deploy.sh`, and later by updates).

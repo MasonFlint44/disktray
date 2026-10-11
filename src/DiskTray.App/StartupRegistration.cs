@@ -40,6 +40,25 @@ internal static class StartupRegistration
         }
     }
 
+    /// <summary>Takes DiskTray out of Startup apps entirely, for an uninstall.</summary>
+    public static void Remove()
+    {
+        try
+        {
+            using (var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true))
+            {
+                run?.DeleteValue(ValueName, throwOnMissingValue: false);
+            }
+
+            using var approved = Registry.CurrentUser.OpenSubKey(ApprovedKey, writable: true);
+            approved?.DeleteValue(ValueName, throwOnMissingValue: false);
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or System.IO.IOException)
+        {
+            Log.Error("Couldn't remove the Run entry", e);
+        }
+    }
+
     /// <summary>Points the Run entry at this copy and switches it on or off, the way Task Manager does.</summary>
     public static bool Set(bool enabled)
     {

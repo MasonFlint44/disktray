@@ -56,12 +56,13 @@ public partial class App : Application
             case ["--exit"]:
                 // Lets scripts and installers close the running copy cleanly, so its icons
                 // leave the tray instead of lingering until hovered.
-                if (EventWaitHandle.TryOpenExisting(ExitEventName, out var signal))
-                {
-                    signal.Set();
-                    signal.Dispose();
-                }
-
+                CloseRunningCopy(wait: false);
+                Shutdown();
+                return;
+            case ["--uninstall", .. var options] when options.All(o => o == "--quiet"):
+                // Settings › Apps runs this.
+                Themes.Choose(SettingsFile.Load().Theme);
+                await Uninstaller.RunAsync(quiet: options.Length > 0, () => CloseRunningCopy(wait: true));
                 Shutdown();
                 return;
         }
@@ -80,6 +81,7 @@ public partial class App : Application
             _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
 
         Log.Info($"Started {Environment.ProcessPath}{(dryRun ? " for clean up dry runs" : "")}");
+        Uninstaller.Register();
         var settings = SettingsFile.Load();
         if (!settings.StartupRegistered && StartupRegistration.Set(true))
         {
@@ -91,6 +93,42 @@ public partial class App : Application
         Notifier.Start();
         _tray = new TrayController(CreateMonitor(), settings, dryRun);
         await _tray.StartAsync();
+    }
+
+    /// <summary>Asks the running copy to exit, and optionally waits until it has. False if it's still running.</summary>
+    private static bool CloseRunningCopy(bool wait)
+    {
+        if (!EventWaitHandle.TryOpenExisting(ExitEventName, out var signal))
+        {
+            return true;
+        }
+
+        using (signal)
+        {
+            signal.Set();
+        }
+
+        if (!wait)
+        {
+            return true;
+        }
+
+        // The running copy holds the instance mutex until it has exited.
+        using var instance = new Mutex(initiallyOwned: false, InstanceMutexName);
+        try
+        {
+            if (!instance.WaitOne(TimeSpan.FromSeconds(10)))
+            {
+                return false;
+            }
+        }
+        catch (AbandonedMutexException)
+        {
+            // It ended without letting go, which still means it's gone.
+        }
+
+        instance.ReleaseMutex();
+        return true;
     }
 
     protected override void OnExit(ExitEventArgs e)

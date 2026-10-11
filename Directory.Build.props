@@ -6,5 +6,8 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- Lets the Windows-only projects build from WSL/Linux. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- Shown in Settings › Apps. -->
+    <Version>0.1.0</Version>
+    <Product>DiskTray</Product>
   </PropertyGroup>
 </Project>
