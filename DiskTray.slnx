@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DiskTray.Core/DiskTray.Core.csproj" />
+    <Project Path="src/DiskTray.App/DiskTray.App.csproj" />
+    <Project Path="src/DiskTray.Compactor/DiskTray.Compactor.csproj" />
+  </Folder>
+</Solution>

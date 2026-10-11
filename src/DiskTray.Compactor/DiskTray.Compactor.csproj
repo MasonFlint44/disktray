@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Small elevated helper: shuts down WSL and compacts the VHDX paths it is given, then reports back. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <AssemblyName>DiskTray.Compactor</AssemblyName>
+  </PropertyGroup>
+</Project>
