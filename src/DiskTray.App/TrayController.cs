@@ -58,6 +58,8 @@ internal sealed class TrayController : IDisposable
         ApplicationThemeManager.Changed += OnThemeChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
         Notifier.Clicked += OnNotificationClicked;
+        // A folder's count finishing is worth showing without waiting for the next refresh.
+        _monitor.Folders.Measured += (_, _) => Application.Current?.Dispatcher.BeginInvoke(async () => await RefreshAsync());
     }
 
     public async Task StartAsync()
@@ -77,7 +79,8 @@ internal sealed class TrayController : IDisposable
         _refreshing = true;
         try
         {
-            _snapshot = await Task.Run(_monitor.Measure);
+            var pins = _settings.Pins;
+            _snapshot = await Task.Run(() => _monitor.Measure(pins));
             _problem = null;
             Redraw();
             CheckAlerts(UserIsActive());
@@ -127,15 +130,15 @@ internal sealed class TrayController : IDisposable
         {
             // Nothing measured yet. Show one plain icon so there's still a way to exit.
             var empty = new PieChart([new PieSlice(1, Palette.Free)], AlertLevel.Normal);
-            SetIcon(TrayLayout.DriveKey, PieIconRenderer.ToIcon(PieIconRenderer.Render(empty, size)), _problem is null ? "DiskTray" : TrayLayout.ToolTip("DiskTray", _problem));
+            SetIcon(TrayLayout.DriveKey, PieIconRenderer.ToIcon(PieIconRenderer.Render(empty, size, _settings.IconShape)), _problem is null ? "DiskTray" : TrayLayout.ToolTip("DiskTray", _problem));
             return;
         }
 
-        var models = TrayLayout.Build(_snapshot, _settings.Thresholds);
+        var models = TrayLayout.Build(_snapshot, _settings.Thresholds, pins: _settings.Pins);
         foreach (var model in models)
         {
             string toolTip = _problem is null ? model.ToolTip : TrayLayout.ToolTip(model.ToolTip, _problem);
-            SetIcon(model.Key, PieIconRenderer.ToIcon(PieIconRenderer.Render(model.Chart, size)), toolTip);
+            SetIcon(model.Key, PieIconRenderer.ToIcon(PieIconRenderer.Render(model.Chart, size, _settings.IconShape)), toolTip);
         }
 
         foreach (string key in _icons.Keys.Except(models.Select(m => m.Key)).ToList())
@@ -201,7 +204,7 @@ internal sealed class TrayController : IDisposable
         if (toast is not null)
         {
             var theme = ToastImage.WindowsMode();
-            var picture = FlyoutLayout.Build(_snapshot, _settings.Thresholds, theme, DateTimeOffset.Now, _settings.RefreshInterval);
+            var picture = FlyoutLayout.Build(_snapshot, _settings.Thresholds, theme, DateTimeOffset.Now, _settings.RefreshInterval, pins: _settings.Pins);
             Notifier.Show(toast, ToastImage.Save(picture, theme));
         }
     }
@@ -227,7 +230,7 @@ internal sealed class TrayController : IDisposable
     {
         if (_flyout is not null && _snapshot is not null)
         {
-            _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem));
+            _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem, pins: _settings.Pins));
             _flyout.ShowCleanup(_cleanupProgress?.Text, _cleanupProgress?.CanCancel == true);
         }
     }
@@ -342,7 +345,7 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        _settingsWindow = new SettingsWindow(_settings, StartupRegistration.IsEnabled(), _snapshot?.SystemDrive);
+        _settingsWindow = new SettingsWindow(_settings, StartupRegistration.IsEnabled(), _snapshot);
         _settingsWindow.Saved += SaveSettings;
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
@@ -367,6 +370,8 @@ internal sealed class TrayController : IDisposable
         Themes.Choose(settings.Theme);
         Redraw();
         CheckAlerts(UserIsActive());
+        // New pins need measuring before their icons can show anything.
+        _ = RefreshAsync();
     }
 
     // The donut's gray slices differ between light and dark.

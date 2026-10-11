@@ -10,17 +10,29 @@ difference is *reclaimable* and is shown as a lighter tint of the item's color.
 
 ## Tray icons
 
-- Up to 3 pinned icons. Tray slots are fixed-size squares, so each icon is redrawn
-  in code on every refresh.
-- **Shape** (one setting for all icons): Pie, or Bar (vertical bar).
+- Up to 3 pinned items, each with its own icon: Docker's data disk, a WSL distro, a
+  drive, or any file or folder. At least one stays pinned. Tray slots are fixed-size
+  squares, so each icon is redrawn in code on every refresh.
+- **Shape** (one setting for all icons): Pie, or Bar (a vertical bar half the icon
+  wide, filled from the bottom, so a disk icon reads like a gauge with free space on top).
 - **Disk-file icons (Docker, Ubuntu, any pinned path).** The whole circle (or bar)
-  is that disk file plus the free space on C:. It shows used (item color),
+  is that disk file plus the free space on its drive. It shows used (item color),
   reclaimable (lighter tint) and free (dark gray). Today: Docker ≈ 73% (18% used,
-  55% reclaimable), Ubuntu ≈ 56%.
-  - "Icon shows" option: **Disk + free space** (default) or **Share of drive**.
-- **Drive icon.** The whole drive broken down into Docker / Ubuntu / Windows & other /
-  free.
+  55% reclaimable), Ubuntu ≈ 56%. Pinned files and folders have no reclaimable part.
+  - "Icon shows" option: **Disk + free space** (default; **Size + free space** for a
+    path) or **Share of drive** (the item, the rest of what's used on the drive, and free).
+- **Drive icon.** The whole drive broken down into the pinned items on it, largest
+  first, then Windows & other and free. Items that aren't pinned count as Windows &
+  other.
   - "Icon shows" option: **Drive breakdown** (default) or **Used vs free**.
+- **Pinned folders** are added up in the background, when pinned and then hourly, since
+  walking a big folder takes a while (links and junctions are skipped). Their tooltip and
+  legend say when ("as of 2:14 PM"). Until the first count, the icon is a plain circle
+  saying so.
+- **Missing items** (Docker not installed, a deleted file, a drive that isn't there)
+  keep their icon as a plain circle whose tooltip says what's missing.
+- **What gets compacted** stays Docker's data disk and the primary distro's, whatever
+  is pinned, and so does the "reclaimable" line in notifications.
 - **Warning indicator.** An amber ring or outline when free space is below the
   warning level, red below the critical level.
 - **Tooltip.** For example: `Docker data · 129 GiB (75 GiB reclaimable)` /
@@ -30,11 +42,12 @@ difference is *reclaimable* and is shown as a lighter tint of the item's color.
 - **Sizes** are 1024-based and labelled GiB (also KiB, MiB, TiB), with one decimal below
   10 and whole numbers from 10 up. The numbers match Explorer, which counts the same
   way but labels them GB.
-- **Default icons** (until Settings exists): the Docker data disk, the primary WSL
-  distro (WSL's default distro, or else the largest), and drive C:.
+- **Default icons:** the Docker data disk, the primary WSL distro (WSL's default
+  distro, or else the largest), and the system drive.
 - Icons are drawn at the taskbar's DPI (16 px at 100%, 24 at 150%, 32 at 200%). Each
-  icon's GUID is derived from the exe path, because Windows ties tray GUIDs to the
-  path and remembers pinning by GUID.
+  icon's GUID is derived from the exe path and the item (Docker, the distro's ID, the
+  drive or the path), because Windows ties tray GUIDs to the path and remembers pinning
+  by GUID. The default items keep the keys they had before pinning existed.
 
 ### Colors
 
@@ -55,7 +68,12 @@ the tint stands out (about 6 : 1). The icons look the same on either taskbar the
 The flyout follows the app theme. On a light background, Windows & other is `#8C8C8C`
 and free is `#E0E0E0`, so free stays the lightest slice.
 
-Each pinned item has a color picker, and its tint is derived from the chosen color.
+Each pinned item has a color: its usual one (Docker blue, WSL orange; pinned files and
+folders take purple `#A371F7`, green `#3FB950` and teal `#1ABC9C` in turn), or one
+picked in a color picker (shade square, hue strip, hex box, suggested colors and a
+preview of the tray icon). The tint is derived from the color. The picker warns when a
+color is below 1.5 : 1 against the free slice, where it would blend in. A drive's color
+is its Windows & other slice.
 
 ## Detection
 
@@ -86,7 +104,7 @@ Each pinned item has a color picker, and its tint is derived from the chosen col
   - There's no way to run a command only if the distro is already up. If a distro stops
     in the moment between the list and the `df`, WSL starts it again, and it shuts down
     on its own once idle.
-- **Add a path…** pins any file or folder by hand.
+- **Add… › File… / Folder…** in Settings › Tray icons pins any file or folder by hand.
 
 ## Flyout (left-click a tray icon)
 
@@ -194,10 +212,12 @@ anything.
 
 Opened from the flyout's gear or the tray menu. Nothing changes until **Save**; **Cancel**
 throws the changes away. Tabs arrive with the features they control, so for now there
-are Alerts, Clean up and General.
+are Tray icons, Alerts, Clean up and General.
 
-- **Tray icons:** shape (Pie/Bar); pinned rows with color, name, path
-  ("auto-detected" or the chosen path) and "Icon shows"; Add a path….
+- **Tray icons:** shape (Pie/Bar); pinned rows with color, name (blank for the detected
+  one), path ("auto-detected", the drive, or the chosen path) and "Icon shows", each with
+  a remove button; **Add…** lists what was detected but isn't pinned (Docker data, each
+  distro, each fixed drive), then File… and Folder….
 - **Detection:** WSL distros, Docker Desktop data disk, daily large-file scan and
   its threshold, show "Other large files" in the flyout, and the "Code folders to
   search" list.

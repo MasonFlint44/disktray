@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Collections.ObjectModel;
 using DiskTray.Core.Alerts;
 using DiskTray.Core.Cleanup;
 using DiskTray.Core.Tray;
@@ -31,7 +32,18 @@ public sealed record AppSettings
 
     private static readonly AppSettings Defaults = new();
 
+    private readonly PinList _pins = new(TrayPin.Defaults);
+
     public AppTheme Theme { get; init; } = AppTheme.System;
+
+    public IconShape IconShape { get; init; } = IconShape.Pie;
+
+    /// <summary>The items with their own tray icon, in order. See <see cref="TrayPin.Clean"/>.</summary>
+    public IReadOnlyList<TrayPin> Pins
+    {
+        get => _pins;
+        init => _pins = new PinList(value ?? TrayPin.Defaults);
+    }
 
     public int RefreshMinutes { get; init; } = 5;
 
@@ -130,6 +142,13 @@ public sealed record AppSettings
             settings = settings with { Theme = Defaults.Theme };
         }
 
+        if (!Enum.IsDefined(settings.IconShape))
+        {
+            settings = settings with { IconShape = Defaults.IconShape };
+        }
+
+        settings = settings with { Pins = TrayPin.Clean(settings.Pins) };
+
         if (!Enum.IsDefined(settings.CleanupCompactWhen))
         {
             settings = settings with { CleanupCompactWhen = Defaults.CleanupCompactWhen };
@@ -159,5 +178,15 @@ public sealed record AppSettings
         return minutes % 60 == 0
             ? string.Format(provider, minutes == 60 ? "{0} hour" : "{0} hours", minutes / 60)
             : string.Format(provider, minutes == 1 ? "{0} minute" : "{0} minutes", minutes);
+    }
+
+    /// <summary>A list of pins that two settings compare by what's in it, not which list it is.</summary>
+    private sealed class PinList(IEnumerable<TrayPin> pins) : ReadOnlyCollection<TrayPin>(pins.ToList()), IEquatable<PinList>
+    {
+        public bool Equals(PinList? other) => other is not null && this.SequenceEqual(other);
+
+        public override bool Equals(object? obj) => Equals(obj as PinList);
+
+        public override int GetHashCode() => this.Aggregate(0, (hash, pin) => HashCode.Combine(hash, pin));
     }
 }

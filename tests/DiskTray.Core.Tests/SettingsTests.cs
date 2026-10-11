@@ -58,7 +58,7 @@ public class AppSettingsTests
 
     [Fact]
     public void Ignores_settings_it_doesnt_know() =>
-        Assert.Equal(new AppSettings { RefreshMinutes = 30 }, AppSettings.FromJson("""{ "refreshMinutes": 30, "iconShape": "bar" }"""));
+        Assert.Equal(new AppSettings { RefreshMinutes = 30 }, AppSettings.FromJson("""{ "refreshMinutes": 30, "sparkles": "lots" }"""));
 
     [Theory]
     [InlineData(15, 5, null)]

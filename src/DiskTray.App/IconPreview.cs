@@ -24,9 +24,10 @@ internal static class IconPreview
     public static void Run(DiskMonitor monitor, string folder)
     {
         Directory.CreateDirectory(folder);
-        var snapshot = monitor.Measure();
-        var thresholds = SettingsFile.Load().Thresholds;
-        var models = TrayLayout.Build(snapshot, thresholds).ToList();
+        var settings = SettingsFile.Load();
+        var snapshot = monitor.Measure(settings.Pins);
+        var thresholds = settings.Thresholds;
+        var models = TrayLayout.Build(snapshot, thresholds, pins: settings.Pins).ToList();
         models.Add(Sample("sample-reclaimable", AlertLevel.Normal));
         models.Add(Sample("sample-critical", AlertLevel.Critical));
 
@@ -40,6 +41,7 @@ internal static class IconPreview
                 PieIconRenderer.SavePng(bitmap, Path.Combine(folder, $"{name}{size}.png"));
                 // Also go through the .ico path the tray uses.
                 using var icon = PieIconRenderer.ToIcon(bitmap);
+                PieIconRenderer.SavePng(PieIconRenderer.Render(model.Chart, size, IconShape.Bar), Path.Combine(folder, $"{name}bar-{size}.png"));
             }
 
             text.Append($"[{model.Key}]\n{model.ToolTip}\n\n");
@@ -55,25 +57,25 @@ internal static class IconPreview
 
         foreach (var theme in new[] { SurfaceTheme.Dark, SurfaceTheme.Light })
         {
-            var model = FlyoutLayout.Build(snapshot, SettingsFile.Load().Thresholds, theme, DateTimeOffset.Now, TimeSpan.FromMinutes(5));
+            var model = FlyoutLayout.Build(snapshot, thresholds, theme, DateTimeOffset.Now, TimeSpan.FromMinutes(5), pins: settings.Pins);
             if (ToastImage.Save(model, theme) is { } image)
             {
                 File.Move(image, Path.Combine(folder, $"toast-{theme.ToString().ToLowerInvariant()}.png"), overwrite: true);
             }
         }
 
-        SaveFlyout(snapshot, ApplicationTheme.Dark, null, Path.Combine(folder, "flyout-dark.png"));
-        SaveFlyout(snapshot, ApplicationTheme.Light, null, Path.Combine(folder, "flyout-light.png"));
-        SaveFlyout(snapshot, ApplicationTheme.Dark, "Couldn't refresh: (sample)", Path.Combine(folder, "flyout-problem.png"));
+        SaveFlyout(snapshot, settings, ApplicationTheme.Dark, null, Path.Combine(folder, "flyout-dark.png"));
+        SaveFlyout(snapshot, settings, ApplicationTheme.Light, null, Path.Combine(folder, "flyout-light.png"));
+        SaveFlyout(snapshot, settings, ApplicationTheme.Dark, "Couldn't refresh: (sample)", Path.Combine(folder, "flyout-problem.png"));
     }
 
     /// <summary>Renders the flyout's content at 200% on the theme's plain background (the real one is see-through).</summary>
-    private static void SaveFlyout(DiskSnapshot snapshot, ApplicationTheme theme, string? problem, string path)
+    private static void SaveFlyout(DiskSnapshot snapshot, DiskTray.Core.Settings.AppSettings settings, ApplicationTheme theme, string? problem, string path)
     {
         ApplicationThemeManager.Apply(theme, WindowBackdropType.None, updateAccent: false);
         var view = new FlyoutView
         {
-            DataContext = FlyoutLayout.Build(snapshot, SettingsFile.Load().Thresholds, Themes.Current, DateTimeOffset.Now, TimeSpan.FromMinutes(5), problem),
+            DataContext = FlyoutLayout.Build(snapshot, settings.Thresholds, Themes.Current, DateTimeOffset.Now, TimeSpan.FromMinutes(5), problem, pins: settings.Pins),
         };
         var root = new Border { Child = view };
         root.SetResourceReference(Border.BackgroundProperty, "SolidBackgroundFillColorBaseBrush");

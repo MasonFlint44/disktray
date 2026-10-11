@@ -4,8 +4,8 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  Title="DiskTray Settings"
-                 Width="600"
-                 Height="560"
+                 Width="700"
+                 Height="660"
                  MinWidth="480"
                  MinHeight="400"
                  WindowStartupLocation="CenterScreen"
@@ -46,6 +46,41 @@
                  Icon="{ui:ImageIcon 'pack://application:,,,/app.ico', Width=16, Height=16}" />
 
     <TabControl x:Name="Tabs" Grid.Row="1" Margin="16,4,16,0">
+      <TabItem Header="Tray icons">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="0,16,0,8">
+            <TextBlock Text="Icon shape" Style="{StaticResource Heading}" />
+            <Border Style="{StaticResource Card}">
+              <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="ShapePie" GroupName="Shape" Style="{StaticResource {x:Type ToggleButton}}" Margin="0,0,8,0" Padding="12,6"
+                             AutomationProperties.Name="Pie">
+                  <StackPanel Orientation="Horizontal">
+                    <Image x:Name="PiePreview" Width="20" Height="20" Margin="0,0,8,0" />
+                    <TextBlock Text="Pie" VerticalAlignment="Center" />
+                  </StackPanel>
+                </RadioButton>
+                <RadioButton x:Name="ShapeBar" GroupName="Shape" Style="{StaticResource {x:Type ToggleButton}}" Padding="12,6"
+                             AutomationProperties.Name="Bar">
+                  <StackPanel Orientation="Horizontal">
+                    <Image x:Name="BarPreview" Width="20" Height="20" Margin="0,0,8,0" />
+                    <TextBlock Text="Bar" VerticalAlignment="Center" />
+                  </StackPanel>
+                </RadioButton>
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Pinned items" Style="{StaticResource Heading}" Margin="0,8,0,2" />
+            <TextBlock Text="Up to 3, each with its own tray icon. The drive's icon breaks it down into the items pinned on it."
+                       Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8" />
+            <StackPanel x:Name="PinRows" />
+            <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+              <ui:Button x:Name="AddPin" Content="Add…" Icon="{ui:SymbolIcon Add24}" Click="OnAddPin" />
+              <TextBlock x:Name="AddHint" Style="{StaticResource Hint}" Margin="12,0,0,0" Text="All 3 are in use. Remove one to add another." Visibility="Collapsed" />
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <TabItem Header="Alerts">
         <StackPanel Margin="0,16,0,0">
           <TextBlock Text="Warning levels" Style="{StaticResource Heading}" />

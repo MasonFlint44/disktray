@@ -162,7 +162,7 @@ public static class CleanupLayout
     /// as big as what's in use, less what the prune removes from Docker's.
     /// </summary>
     public static IReadOnlyList<CompactTarget> Targets(DiskSnapshot snapshot, long pruneBytes) =>
-        TrayLayout.PinnedFiles(snapshot)
+        TrayLayout.CompactableFiles(snapshot)
             .OrderByDescending(f => f.SizeBytes)
             .Select(f => new CompactTarget(
                 f,

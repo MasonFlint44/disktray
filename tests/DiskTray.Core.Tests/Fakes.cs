@@ -15,7 +15,18 @@ internal sealed class FakeDiskProbe : IDiskProbe
 
     public DriveSpace? GetDriveSpace(string root) => Drives.GetValueOrDefault(root);
 
+    public HashSet<string> Folders { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public string? ReadAllText(string path) => Texts.GetValueOrDefault(path);
+
+    public bool FolderExists(string path) => Folders.Contains(path);
+}
+
+internal sealed class FakeFolderSizes : IFolderSizes
+{
+    public Dictionary<string, FolderSize> Sizes { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public FolderSize? Get(string path) => Sizes.GetValueOrDefault(path);
 }
 
 internal sealed class FakeWslRegistry(WslRegistryData data) : IWslRegistry

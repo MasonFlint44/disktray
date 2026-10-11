@@ -6,17 +6,24 @@ using DiskTray.Core.Tray;
 
 namespace DiskTray.App;
 
-/// <summary>Draws a <see cref="PieChart"/> as a tray icon.</summary>
+/// <summary>Draws a <see cref="PieChart"/> as a tray icon: a pie, or a vertical bar filled from the bottom.</summary>
 internal static class PieIconRenderer
 {
     private static readonly Dictionary<Rgb, SolidColorBrush> Brushes = [];
 
-    public static BitmapSource Render(PieChart chart, int size)
+    public static BitmapSource Render(PieChart chart, int size, IconShape shape = IconShape.Pie)
     {
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
-            Draw(dc, chart, size);
+            if (shape == IconShape.Bar)
+            {
+                DrawBar(dc, chart, size);
+            }
+            else
+            {
+                Draw(dc, chart, size);
+            }
         }
 
         var bitmap = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
@@ -45,17 +52,48 @@ internal static class PieIconRenderer
         encoder.Save(file);
     }
 
-    private static void Draw(DrawingContext dc, PieChart chart, int size)
-    {
-        // A thin gray outline keeps the dark "free" color visible on a dark taskbar; a
-        // thicker amber or red one means free space is low.
-        double ring = chart.Alert == AlertLevel.Normal ? Math.Max(1, size / 16.0) : Math.Max(2, size / 9.0);
-        var ringColor = chart.Alert switch
+    // A thin gray outline keeps the dark "free" color visible on a dark taskbar; a thicker
+    // amber or red one means free space is low.
+    private static (double Width, Rgb Color) Outline(PieChart chart, int size) => (
+        chart.Alert == AlertLevel.Normal ? Math.Max(1, size / 16.0) : Math.Max(2, size / 9.0),
+        chart.Alert switch
         {
             AlertLevel.Critical => Palette.Critical,
             AlertLevel.Warning => Palette.Warning,
             _ => Palette.Outline,
-        };
+        });
+
+    /// <summary>
+    /// A bar half the icon wide, slices stacked from the bottom in order, so a disk icon fills
+    /// up like a gauge with free space on top. Edges sit on whole pixels to stay sharp.
+    /// </summary>
+    private static void DrawBar(DrawingContext dc, PieChart chart, int size)
+    {
+        var (ring, ringColor) = Outline(chart, size);
+        double width = Math.Round(size * 0.5);
+        double left = Math.Floor((size - width) / 2);
+        var outer = new Rect(left, 0, width, size);
+        double corner = Math.Max(1, size / 10.0);
+        var inner = new Rect(left + ring, ring, Math.Max(0, width - (2 * ring)), Math.Max(0, size - (2 * ring)));
+
+        dc.PushClip(new RectangleGeometry(outer, corner, corner));
+        double bottom = inner.Bottom;
+        foreach (var slice in chart.Slices)
+        {
+            double height = slice.Fraction * inner.Height;
+            // Each slice runs to the top over the ones before it, like the pie's wedges, so no seams show.
+            dc.DrawRectangle(Brush(slice.Color), null, new Rect(inner.Left, inner.Top, inner.Width, Math.Max(0, bottom - inner.Top)));
+            bottom -= height;
+        }
+
+        dc.Pop();
+        double half = ring / 2;
+        dc.DrawRoundedRectangle(null, new Pen(Brush(ringColor), ring), new Rect(left + half, half, width - ring, size - ring), corner, corner);
+    }
+
+    private static void Draw(DrawingContext dc, PieChart chart, int size)
+    {
+        var (ring, ringColor) = Outline(chart, size);
         double outer = size / 2.0;
         var center = new Point(outer, outer);
         // Tuck the pie half a pixel under the ring so no gap shows between them.

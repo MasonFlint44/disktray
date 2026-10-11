@@ -122,7 +122,7 @@ public static class AlertRules
         };
 
         string body = FlyoutLayout.LowSpaceBanner(drive, thresholds, provider)?.Text ?? "";
-        long reclaimable = TrayLayout.PinnedFilesOn(snapshot, drive).Sum(f => f.ReclaimableBytes ?? 0);
+        long reclaimable = TrayLayout.CompactableFiles(snapshot).Where(f => string.Equals(f.DriveRoot, drive.Root, StringComparison.OrdinalIgnoreCase)).Sum(f => f.ReclaimableBytes ?? 0);
         if (reclaimable > 0)
         {
             body += $"\n{ByteSize.Format(reclaimable, provider)} is reclaimable by compacting.";

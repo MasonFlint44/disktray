@@ -11,6 +11,18 @@ public interface IDiskProbe
 
     /// <summary>The file's text, or null if it doesn't exist or can't be read.</summary>
     string? ReadAllText(string path);
+
+    bool FolderExists(string path);
+}
+
+/// <summary>A folder's total size, added up at <paramref name="MeasuredAt"/>.</summary>
+public sealed record FolderSize(long Bytes, DateTimeOffset MeasuredAt);
+
+/// <summary>Folder sizes, added up in the background since that can take a while. Implemented in the app.</summary>
+public interface IFolderSizes
+{
+    /// <summary>The folder's last measured size, or null before the first.</summary>
+    FolderSize? Get(string path);
 }
 
 public sealed class SystemDiskProbe : IDiskProbe
@@ -52,4 +64,6 @@ public sealed class SystemDiskProbe : IDiskProbe
             return null;
         }
     }
+
+    public bool FolderExists(string path) => Directory.Exists(path);
 }

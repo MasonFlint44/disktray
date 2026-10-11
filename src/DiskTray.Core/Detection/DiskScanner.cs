@@ -1,3 +1,5 @@
+using DiskTray.Core.Tray;
+
 namespace DiskTray.Core.Detection;
 
 /// <param name="SystemDriveRoot">Usually <c>C:\</c>.</param>
@@ -6,14 +8,15 @@ namespace DiskTray.Core.Detection;
 public sealed record ScanPaths(string SystemDriveRoot, string LocalAppData, string AppData);
 
 /// <summary>
-/// Finds the Docker and WSL disk files and measures them and their drives. Only reads file
-/// sizes, so it never starts WSL or Docker. <see cref="Usage.UsageMeter"/> adds how much of
-/// each disk is in use.
+/// Finds the Docker and WSL disk files and measures them and their drives, plus the files,
+/// folders and drives pinned to the tray. Only reads file sizes, so it never starts WSL or
+/// Docker. <see cref="Usage.UsageMeter"/> adds how much of each disk is in use.
 /// </summary>
-public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPaths paths, TimeProvider clock)
+public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPaths paths, TimeProvider clock, IFolderSizes? folders = null)
 {
-    public DiskSnapshot Scan()
+    public DiskSnapshot Scan(IReadOnlyList<TrayPin>? pins = null)
     {
+        pins ??= TrayPin.Defaults;
         var registryData = registry.Read();
         var distros = WslDistros.FromRegistry(registryData);
         var files = new List<DiskFile>();
@@ -34,10 +37,19 @@ public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPat
             }
         }
 
+        foreach (var pin in pins.Where(p => p.Kind == PinKind.Path && p.Target is not null))
+        {
+            if (PinnedPath(pin.Target!) is { } pinned)
+            {
+                files.Add(pinned);
+            }
+        }
+
         var systemDrive = probe.GetDriveSpace(paths.SystemDriveRoot)
             ?? throw new InvalidOperationException($"Couldn't read the size of drive {paths.SystemDriveRoot}.");
         var drives = new List<DriveSpace> { systemDrive };
-        foreach (string root in files.Select(f => f.DriveRoot).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase))
+        var pinnedDrives = pins.Where(p => p.Kind == PinKind.Drive && p.Target is not null).Select(p => p.Target!);
+        foreach (string root in files.Select(f => f.DriveRoot).OfType<string>().Concat(pinnedDrives).Distinct(StringComparer.OrdinalIgnoreCase))
         {
             if (!drives.Any(d => string.Equals(d.Root, root, StringComparison.OrdinalIgnoreCase))
                 && probe.GetDriveSpace(root) is { } drive)
@@ -47,6 +59,27 @@ public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPat
         }
 
         return new DiskSnapshot(clock.GetUtcNow(), systemDrive, drives, files, PickPrimaryDistro(files, registryData.DefaultDistributionId));
+    }
+
+    /// <summary>The ID a pinned path's file has in a snapshot.</summary>
+    public static string PathId(string path) => "path:" + path.TrimEnd('\\').ToUpperInvariant();
+
+    private DiskFile? PinnedPath(string path)
+    {
+        string name = WindowsPath.GetName(path);
+        if (probe.GetFileSize(path) is { } size)
+        {
+            return new DiskFile(PathId(path), name, path, DiskKind.File, size);
+        }
+
+        if (!probe.FolderExists(path))
+        {
+            return null;
+        }
+
+        // Until the first count finishes, the folder is there with no size yet.
+        var measured = folders?.Get(path);
+        return new DiskFile(PathId(path), name, path, DiskKind.Folder, measured?.Bytes ?? 0) { SizedAsOf = measured?.MeasuredAt };
     }
 
     private DiskFile? FindDockerData(IReadOnlyList<WslDistro> distros)

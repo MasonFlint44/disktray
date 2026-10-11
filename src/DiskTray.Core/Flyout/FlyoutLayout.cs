@@ -30,15 +30,16 @@ public sealed record FlyoutModel(
     string Footer);
 
 /// <summary>
-/// Works out the flyout for the system drive: the same items as the drive's tray icon, with
-/// each disk file split into used and reclaimable space when that's known. Disk files go
-/// largest first; Windows &amp; other and free always come last.
+/// Works out the flyout for the system drive: the pinned items on it, with each disk file
+/// split into used and reclaimable space when that's known. Items go largest first; Windows
+/// &amp; other and free always come last.
 /// </summary>
 public static class FlyoutLayout
 {
     /// <param name="now">The current time, so "Updated" can show a date once the reading is a day old.</param>
     /// <param name="refreshInterval">How often the tray checks, for the footer.</param>
     /// <param name="problem">Why the last refresh failed, if it did.</param>
+    /// <param name="pins">What's pinned to the tray, or null for <see cref="TrayPin.Defaults"/>.</param>
     public static FlyoutModel Build(
         DiskSnapshot snapshot,
         AlertThresholds thresholds,
@@ -47,22 +48,29 @@ public static class FlyoutLayout
         TimeSpan refreshInterval,
         string? problem = null,
         IFormatProvider? provider = null,
-        TimeZoneInfo? zone = null)
+        TimeZoneInfo? zone = null,
+        IReadOnlyList<TrayPin>? pins = null)
     {
         provider ??= CultureInfo.CurrentCulture;
         zone ??= TimeZoneInfo.Local;
         var drive = snapshot.SystemDrive;
-        var files = TrayLayout.PinnedFilesOn(snapshot, drive).OrderByDescending(f => f.SizeBytes).ToList();
+        var all = TrayLayout.Resolve(snapshot, pins ?? TrayPin.Defaults);
+        var items = TrayLayout.ItemsOn(all, drive);
+        var files = items.Select(i => i.File!).ToList();
         long other = TrayLayout.OtherBytes(drive, files);
-        var otherColor = theme == SurfaceTheme.Light ? Palette.OtherOnLight : Palette.Other;
+        // A color picked for the drive is its "Windows & other" color.
+        var driveItem = all.FirstOrDefault(i => i.IsDrive && i.Drive == drive);
+        var otherColor = driveItem?.Pin.Color is not null ? driveItem.Color.Main
+            : theme == SurfaceTheme.Light ? Palette.OtherOnLight : Palette.Other;
         var freeColor = theme == SurfaceTheme.Light ? Palette.FreeOnLight : Palette.Free;
         string Size(long bytes) => ByteSize.Format(bytes, provider);
 
         var amounts = new List<(long Bytes, Rgb Color)>();
         var legend = new List<LegendItem>();
-        foreach (var file in files)
+        foreach (var item in items)
         {
-            var color = Palette.For(file.Kind);
+            var file = item.File!;
+            var color = item.Color;
             if (file.UsedBytes is { } used)
             {
                 amounts.Add((Math.Min(used, file.SizeBytes), color.Main));
@@ -73,7 +81,7 @@ public static class FlyoutLayout
                 amounts.Add((file.SizeBytes, color.Main));
             }
 
-            legend.Add(new LegendItem(file.Name, Size(file.SizeBytes), color.Main, Detail(file, now, zone, provider)));
+            legend.Add(new LegendItem(item.Name, Size(file.SizeBytes), color.Main, Detail(file, now, zone, provider)));
         }
 
         amounts.Add((other, otherColor));
@@ -92,20 +100,20 @@ public static class FlyoutLayout
             banners.Add(low);
         }
 
-        var reclaimable = files.Where(f => f.ReclaimableBytes > 0).ToList();
-        long reclaimableTotal = reclaimable.Sum(f => f.ReclaimableBytes ?? 0);
+        var reclaimable = items.Where(i => i.File!.ReclaimableBytes > 0).ToList();
+        long reclaimableTotal = reclaimable.Sum(i => i.File!.ReclaimableBytes ?? 0);
 
         return new FlyoutModel(
             $"Drive {drive.Label} · {Size(drive.TotalBytes)}",
             banners,
             PieChart.FromAmounts(amounts, thresholds.Classify(drive)),
-            Description(drive, files, other, provider),
+            Description(drive, items, other, provider),
             Size(drive.FreeBytes),
             legend,
             files.Any(f => f.ReclaimableBytes > 0),
             reclaimableTotal > 0 ? Size(reclaimableTotal) : null,
             reclaimableTotal > 0
-                ? string.Join(" · ", reclaimable.Select(f => $"{TrayLayout.ShortName(f)} {Size(f.ReclaimableBytes ?? 0)}"))
+                ? string.Join(" · ", reclaimable.Select(i => $"{TrayLayout.ShortName(i)} {Size(i.File!.ReclaimableBytes ?? 0)}"))
                 : null,
             Footer(snapshot.TakenAt, now, refreshInterval, zone, provider));
     }
@@ -117,6 +125,11 @@ public static class FlyoutLayout
         {
             string detail = $"{ByteSize.Format(Math.Min(used, file.SizeBytes), provider)} used · {ByteSize.Format(file.ReclaimableBytes ?? 0, provider)} reclaimable";
             return file.UsedAsOf is { } measuredAt ? $"{detail} · as of {TrayLayout.AsOf(measuredAt, now, zone, provider)}" : detail;
+        }
+
+        if (file.SizedAsOf is { } sizedAt)
+        {
+            return $"as of {TrayLayout.AsOf(sizedAt, now, zone, provider)}";
         }
 
         if (file.UsageMount is null)
@@ -155,12 +168,12 @@ public static class FlyoutLayout
     }
 
     /// <summary>For screen readers: "Drive C: 27% Docker data, 13% Ubuntu, 49% Windows &amp; other, 11% free".</summary>
-    private static string Description(DriveSpace drive, IEnumerable<DiskFile> files, long other, IFormatProvider provider)
+    private static string Description(DriveSpace drive, IEnumerable<TrayItem> items, long other, IFormatProvider provider)
     {
         string Part(long bytes, string name) =>
             $"{ByteSize.FormatPercent(drive.TotalBytes > 0 ? (double)bytes / drive.TotalBytes : 0, provider)} {name}";
 
-        var parts = files.Select(f => Part(f.SizeBytes, f.Name))
+        var parts = items.Select(i => Part(i.File!.SizeBytes, i.Name))
             .Append(Part(other, "Windows & other"))
             .Append(Part(drive.FreeBytes, "free"));
         return $"Drive {drive.Label} {string.Join(", ", parts)}";

@@ -33,4 +33,13 @@ public static class WindowsPath
         path.Length >= 2 && char.IsAsciiLetter(path[0]) && path[1] == ':'
             ? $"{char.ToUpperInvariant(path[0])}:\\"
             : null;
+
+    /// <summary>The last part of the path: <c>ext4.vhdx</c>, or <c>git</c> for <c>C:\code\git\</c>. The path itself if it has none.</summary>
+    public static string GetName(string path)
+    {
+        string trimmed = path.TrimEnd('\\', '/');
+        int slash = trimmed.LastIndexOfAny(['\\', '/']);
+        string name = slash >= 0 ? trimmed[(slash + 1)..] : trimmed;
+        return name.Length > 0 && !name.EndsWith(':') ? name : path;
+    }
 }

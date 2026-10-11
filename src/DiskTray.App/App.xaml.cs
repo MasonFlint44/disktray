@@ -109,6 +109,7 @@ public partial class App : Application
 
     private static DiskMonitor CreateMonitor()
     {
+        var folders = new FolderSizer();
         var scanner = new DiskScanner(
             new SystemDiskProbe(),
             new LxssRegistry(),
@@ -116,8 +117,9 @@ public partial class App : Application
                 (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + @"\",
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)),
-            TimeProvider.System);
+            TimeProvider.System,
+            folders);
         var cache = UsageCacheFile.Load();
-        return new DiskMonitor(scanner, new UsageMeter(new WslExe(), cache, TimeProvider.System), cache);
+        return new DiskMonitor(scanner, new UsageMeter(new WslExe(), cache, TimeProvider.System), cache, folders);
     }
 }

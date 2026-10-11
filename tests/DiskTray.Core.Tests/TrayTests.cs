@@ -38,12 +38,59 @@ public class PieChartTests
 
     [Fact]
     public void Rejects_bad_colors() => Assert.Throws<FormatException>(() => Rgb.FromHex("#12345"));
+
+    [Theory]
+    [InlineData("#FF0000", 0, 1, 1)]
+    [InlineData("#00FF00", 120, 1, 1)]
+    [InlineData("#0000FF", 240, 1, 1)]
+    [InlineData("#808080", 0, 0, 0.502)]
+    [InlineData("#000000", 0, 0, 0)]
+    public void Converts_to_hue_saturation_and_value(string hex, double hue, double saturation, double value)
+    {
+        var (h, s, v) = Rgb.FromHex(hex).ToHsv();
+
+        Assert.Equal(hue, h, 3);
+        Assert.Equal(saturation, s, 3);
+        Assert.Equal(value, v, 3);
+    }
+
+    [Fact]
+    public void Measures_contrast()
+    {
+        Assert.Equal(21, Rgb.FromHex("#000000").ContrastWith(Rgb.White), 1);
+        Assert.Equal(1, Palette.Free.ContrastWith(Palette.Free), 3);
+    }
+
+    [Theory]
+    [InlineData("#2496ED", false)]
+    [InlineData("#E95420", false)]
+    [InlineData("#14548A", true)]
+    [InlineData("#404040", true)]
+    public void Warns_about_colors_that_blend_into_free_space(string hex, bool blends) =>
+        Assert.Equal(blends, Palette.BlendsWithFree(Rgb.FromHex(hex)));
+
+    [Theory]
+    [InlineData("#2496ED")]
+    [InlineData("#E95420")]
+    [InlineData("#A371F7")]
+    [InlineData("#3A3A3A")]
+    [InlineData("#FFFFFF")]
+    public void Round_trips_through_hue_saturation_and_value(string hex)
+    {
+        var (h, s, v) = Rgb.FromHex(hex).ToHsv();
+
+        Assert.Equal(Rgb.FromHex(hex), Rgb.FromHsv(h, s, v));
+    }
 }
 
 public class TrayLayoutTests
 {
-    private static IReadOnlyList<TrayIconModel> Build(DiskSnapshot snapshot) =>
-        TrayLayout.Build(snapshot, new AlertThresholds(), CultureInfo.InvariantCulture, TimeZoneInfo.Utc);
+    private static IReadOnlyList<TrayIconModel> Build(DiskSnapshot snapshot, params TrayPin[] pins) =>
+        TrayLayout.Build(snapshot, new AlertThresholds(), CultureInfo.InvariantCulture, TimeZoneInfo.Utc, pins.Length > 0 ? pins : null);
+
+    /// <summary>Just one file's icon, on a drive of its own.</summary>
+    private static TrayIconModel FileIcon(DiskFile file, DriveSpace drive, DateTimeOffset now) =>
+        TrayLayout.Build(new DiskSnapshot(now, drive, [drive], [file], null), new AlertThresholds(), CultureInfo.InvariantCulture, TimeZoneInfo.Utc, [new TrayPin(PinKind.Docker)])[0];
 
     [Fact]
     public void Shows_docker_then_the_distro_then_the_drive() =>
@@ -80,7 +127,7 @@ public class TrayLayoutTests
         var file = new DiskFile("docker", "Docker data", @"C:\d.vhdx", DiskKind.DockerData, 138) { UsedBytes = 34 };
         var drive = new DriveSpace(@"C:\", 472, 51);
 
-        var icon = TrayLayout.DiskIcon(file, drive, new AlertThresholds(), CultureInfo.InvariantCulture, DateTimeOffset.UnixEpoch, TimeZoneInfo.Utc);
+        var icon = FileIcon(file, drive, DateTimeOffset.UnixEpoch);
 
         Assert.Equal([Palette.Docker.Main, Rgb.FromHex("#92CAF6"), Palette.Free], icon.Chart.Slices.Select(s => s.Color));
         Assert.Equal(104 / 189.0, icon.Chart.Slices[1].Fraction, 9);
@@ -97,7 +144,7 @@ public class TrayLayoutTests
             UsedAsOf = now.AddHours(-3).AddMinutes(-46),
         };
 
-        var icon = TrayLayout.DiskIcon(file, new DriveSpace(@"C:\", 472, 51), new AlertThresholds(), CultureInfo.InvariantCulture, now, TimeZoneInfo.Utc);
+        var icon = FileIcon(file, new DriveSpace(@"C:\", 472, 51), now);
 
         Assert.StartsWith("Docker data · 138 bytes (104 bytes reclaimable as of 14:14)\n", icon.ToolTip);
     }

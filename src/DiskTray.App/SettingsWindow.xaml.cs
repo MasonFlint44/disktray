@@ -2,25 +2,28 @@ using System.Windows;
 using DiskTray.Core;
 using DiskTray.Core.Cleanup;
 using DiskTray.Core.Settings;
+using DiskTray.Core.Tray;
 using Wpf.Ui.Controls;
 
 namespace DiskTray.App;
 
 /// <summary>
-/// The Settings window. Nothing changes until Save. More tabs (Tray icons, Detection)
-/// come with the features they control.
+/// The Settings window. Nothing changes until Save. The Detection tab comes with the
+/// large-file scan.
 /// </summary>
 internal partial class SettingsWindow : FluentWindow
 {
     private readonly AppSettings _original;
     private readonly DriveSpace? _drive;
+    private readonly DiskSnapshot? _snapshot;
     private bool _ready;
 
-    /// <param name="drive">The system drive, to show each level as space on it. Null before the first refresh.</param>
-    public SettingsWindow(AppSettings settings, bool startsWithWindows, DriveSpace? drive)
+    /// <param name="snapshot">The last reading, to show each level as space on the drive and what pins point at. Null before the first refresh.</param>
+    public SettingsWindow(AppSettings settings, bool startsWithWindows, DiskSnapshot? snapshot)
     {
         _original = settings;
-        _drive = drive;
+        _snapshot = snapshot;
+        _drive = snapshot?.SystemDrive;
         InitializeComponent();
         Themes.Track(this);
 
@@ -47,6 +50,7 @@ internal partial class SettingsWindow : FluentWindow
         CleanupCompact.IsChecked = settings.CleanupCompact;
         CleanupCompactWhen.SelectedIndex = (int)settings.CleanupCompactWhen;
         CleanupStartDocker.IsChecked = settings.CleanupStartDocker;
+        LoadTrayIcons(settings);
         _ready = true;
         UpdateLevels();
     }
@@ -69,6 +73,8 @@ internal partial class SettingsWindow : FluentWindow
         CleanupCompact = CleanupCompact.IsChecked == true,
         CleanupCompactWhen = (CompactWhen)Math.Max(0, CleanupCompactWhen.SelectedIndex),
         CleanupStartDocker = CleanupStartDocker.IsChecked == true,
+        IconShape = ShapeBar.IsChecked == true ? IconShape.Bar : IconShape.Pie,
+        Pins = TrayPin.Clean(_pins),
     };
 
     private void OnLevelChanged(object sender, RoutedEventArgs e)
