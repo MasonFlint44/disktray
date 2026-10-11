@@ -33,6 +33,7 @@ internal partial class FlyoutWindow : FluentWindow
             CleanupRequested?.Invoke(this, EventArgs.Empty);
         };
         View.CancelCleanupClicked += (_, _) => CancelCleanupRequested?.Invoke(this, EventArgs.Empty);
+        View.PinClicked += (_, path) => PinRequested?.Invoke(this, path);
         Deactivated += (_, _) => Dismiss(fromDeactivate: true);
         PreviewKeyDown += (_, e) =>
         {
@@ -56,6 +57,8 @@ internal partial class FlyoutWindow : FluentWindow
     public event EventHandler? CleanupRequested;
 
     public event EventHandler? CancelCleanupRequested;
+
+    public event EventHandler<string>? PinRequested;
 
     /// <summary>
     /// True right after the flyout lost focus, when a click on a tray icon is the one that

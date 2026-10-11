@@ -8,6 +8,9 @@ public sealed record DiskSnapshot(
     IReadOnlyList<DiskFile> Files,
     string? PrimaryDistroId)
 {
+    /// <summary>Kinds of disk file that weren't looked for, because Settings › Detection turned them off.</summary>
+    public IReadOnlySet<DiskKind> NotDetected { get; init; } = new HashSet<DiskKind>();
+
     public DiskFile? Docker => Files.FirstOrDefault(f => f.Kind == DiskKind.DockerData);
 
     /// <summary>The distro shown by default: the WSL default distro, or else the largest one.</summary>

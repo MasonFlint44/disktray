@@ -17,6 +17,9 @@ public partial class FlyoutView : UserControl
 
     public event EventHandler? CancelCleanupClicked;
 
+    /// <summary>Raised with a large file's path when its pin button is clicked.</summary>
+    public event EventHandler<string>? PinClicked;
+
     /// <summary>Shows how a clean up is going, or hides it when <paramref name="status"/> is null.</summary>
     public void ShowCleanup(string? status, bool canCancel)
     {
@@ -31,4 +34,12 @@ public partial class FlyoutView : UserControl
     private void OnCleanupClick(object sender, RoutedEventArgs e) => CleanupClicked?.Invoke(this, EventArgs.Empty);
 
     private void OnCancelCleanupClick(object sender, RoutedEventArgs e) => CancelCleanupClicked?.Invoke(this, EventArgs.Empty);
+
+    private void OnPinClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string path })
+        {
+            PinClicked?.Invoke(this, path);
+        }
+    }
 }

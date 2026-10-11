@@ -67,6 +67,44 @@
     <TextBlock Text="Lighter shade = space a disk file is holding but not using." Style="{StaticResource Secondary}"
                Margin="0,16,0,0" Visibility="{Binding ShowsReclaimable, Converter={StaticResource VisibleWhenSet}}" />
 
+    <StackPanel Visibility="{Binding ShowsLargeFiles, Converter={StaticResource VisibleWhenSet}}">
+      <Border Style="{StaticResource Divider}" />
+      <TextBlock Text="Other large files" FontSize="13" Margin="0,16,0,0" />
+      <TextBlock Text="{Binding LargeFilesNote}" Style="{StaticResource Secondary}" Margin="0,2,0,0" />
+      <ItemsControl ItemsSource="{Binding LargeFiles}" Focusable="False" Margin="0,4,0,0">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="flyout:LargeFileLine">
+            <Grid Margin="0,6,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+              </Grid.ColumnDefinitions>
+              <StackPanel VerticalAlignment="Center" ToolTip="{Binding Path}">
+                <TextBlock Text="{Binding Name}" FontSize="13" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding Folder}" Style="{StaticResource Secondary}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
+              </StackPanel>
+              <TextBlock Grid.Column="1" Text="{Binding Size}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0,4,0" />
+              <ui:Button Grid.Column="2" Width="32" Height="32" Padding="0" Appearance="Transparent" BorderThickness="0"
+                         Icon="{ui:SymbolIcon Pin24}" Tag="{Binding Path}" Click="OnPinClick" IsEnabled="{Binding CanPin}"
+                         ToolTipService.ShowOnDisabled="True" AutomationProperties.Name="Pin to the tray">
+                <ui:Button.Style>
+                  <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                    <Setter Property="ToolTip" Value="Pin to the tray" />
+                    <Style.Triggers>
+                      <Trigger Property="IsEnabled" Value="False">
+                        <Setter Property="ToolTip" Value="All 3 tray icons are in use. Remove one in Settings to pin this." />
+                      </Trigger>
+                    </Style.Triggers>
+                  </Style>
+                </ui:Button.Style>
+              </ui:Button>
+            </Grid>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </StackPanel>
+
     <StackPanel Visibility="{Binding ReclaimableTotal, Converter={StaticResource VisibleWhenSet}}">
       <Border Style="{StaticResource Divider}" />
       <Grid Margin="0,16,0,0">

@@ -14,7 +14,8 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
     // Sizing every volume can take a while on a big Docker disk.
     private static readonly TimeSpan DiskUsageTimeout = TimeSpan.FromMinutes(2);
 
-    public CleanupState Scan(DiskSnapshot snapshot)
+    /// <param name="codeFolders">Settings › Detection's "Code folders to search".</param>
+    public CleanupState Scan(DiskSnapshot snapshot, IReadOnlyList<string> codeFolders)
     {
         var running = wsl.RunningDistros();
         if (!DesktopRunning() || docker.Run(DockerOutput.DiskUsageCommand, DiskUsageTimeout) is not { } dfOutput
@@ -31,7 +32,8 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
             ProjectFolderCacheFile.Save(cache);
         }
 
-        var groups = VolumeConfidence.Group(usage.UnusedVolumes, fromContainers, cache, [], new FolderLookup(running));
+        var searchIn = codeFolders.Select(ProjectFolder.FromWindowsPath).OfType<ProjectFolder>();
+        var groups = VolumeConfidence.Group(usage.UnusedVolumes, fromContainers, cache, searchIn, new FolderLookup(running));
         return new CleanupState(snapshot, usage, groups, running, containers.Count(c => c.Running));
     }
 

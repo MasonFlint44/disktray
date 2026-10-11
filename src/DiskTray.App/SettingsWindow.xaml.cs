@@ -51,6 +51,7 @@ internal partial class SettingsWindow : FluentWindow
         CleanupCompactWhen.SelectedIndex = (int)settings.CleanupCompactWhen;
         CleanupStartDocker.IsChecked = settings.CleanupStartDocker;
         LoadTrayIcons(settings);
+        LoadDetection(settings);
         _ready = true;
         UpdateLevels();
     }
@@ -74,6 +75,12 @@ internal partial class SettingsWindow : FluentWindow
         CleanupCompactWhen = (CompactWhen)Math.Max(0, CleanupCompactWhen.SelectedIndex),
         CleanupStartDocker = CleanupStartDocker.IsChecked == true,
         IconShape = ShapeBar.IsChecked == true ? IconShape.Bar : IconShape.Pie,
+        DetectDistros = DetectDistros.IsChecked == true,
+        DetectDocker = DetectDocker.IsChecked == true,
+        LargeFileScan = LargeFileScan.IsChecked == true,
+        LargeFileMinGiB = (int)Math.Clamp(Math.Round(LargeFileMin.Value ?? 2), 1, AppSettings.MaxLargeFileMinGiB),
+        ShowLargeFiles = ShowLargeFiles.IsChecked == true,
+        CodeFolders = [.. _codeFolders],
         Pins = TrayPin.Clean(_pins),
     };
 

@@ -88,10 +88,17 @@ is its Windows & other slice.
   used when `docker_data.vhdx` doesn't exist.
 - **Other drives.** A disk file on another drive is measured against that drive's free
   space, and isn't part of the C: breakdown.
-- **Large-file scan.** Daily scan of the user folder for files over a threshold
-  (default 2 GiB) such as `.vhdx`, `.vhd`, `.vmdk` and `.qcow2`. Large files that
-  aren't pinned show up in the flyout's "Other large files" section, which can be
-  toggled off, and each has a pin button.
+- **Large-file scan.** Once a day (checked hourly, first a couple of minutes after
+  startup), a low-priority look through the user folder for any file over a threshold
+  (default 2 GiB), such as `.vhdx`, `.vhd`, `.vmdk`, `.qcow2` or `.iso`. Links and
+  junctions are skipped. The result is kept in `largefiles.json`, so a restart doesn't
+  look again; lowering the threshold does. Files that aren't already shown (Docker's and
+  the distros' disks, pinned files, and anything inside a pinned folder) show up in the
+  flyout's "Other large files" section, largest first, five at most, and each has a pin
+  button (dimmed, with a tooltip, when all 3 pins are in use). The section can be turned
+  off.
+- **Turning detection off.** Settings › Detection can skip WSL distros or Docker's data
+  disk; a pinned one then says "Turned off in Settings › Detection".
 - **"Used inside" numbers.** `df -P -B1 <mount>` run through `wsl.exe --exec`, only in
   distros listed by `wsl.exe --list --running --quiet`, so the app never starts WSL or
   Docker just to measure. A distro's disk is its `/`. Docker's data disk is mounted at
@@ -114,7 +121,8 @@ is its Windows & other slice.
   each item's size plus "N used · N reclaimable". Disk files go largest first;
   Windows & other and Free are always last.
 - "Lighter shade = space a disk file is holding but not using."
-- "Other large files" (over 2 GiB, not pinned), each with a pin button. Can be toggled.
+- "Other large files" (over 2 GiB, not pinned), each with its folder, size and a pin
+  button, and when the scan ran. Can be turned off.
 - "Reclaimable by compacting" total.
 - Footer: "Updated 1:41 PM · checks every 5 min", and the **Clean up…** button.
 - While a clean up runs, a line under the banners says where it is ("Compacts once you
@@ -192,8 +200,8 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
    it's in, so that comes from a bind mount's source, or else is the main distro.
 2. A project → folder cache the app records from containers it sees each time the
    dialog opens, saved as `projects.json` (exact).
-3. A name match inside the "Code folders to search" list (best guess). Until that
-   setting exists, the list is the folders that recorded projects live in.
+3. A name match inside the "Code folders to search" list from Settings › Detection
+   (best guess), plus the folders that recorded projects live in.
 
 Folders inside a distro are only looked at (through `\\wsl.localhost`) when the distro is
 already running, since looking would start it. A folder only counts as deleted when its
@@ -211,8 +219,8 @@ anything.
 ## Settings (tabs)
 
 Opened from the flyout's gear or the tray menu. Nothing changes until **Save**; **Cancel**
-throws the changes away. Tabs arrive with the features they control, so for now there
-are Tray icons, Alerts, Clean up and General.
+throws the changes away. The tabs are Tray icons, Detection, Alerts, Clean up and
+General.
 
 - **Tray icons:** shape (Pie/Bar); pinned rows with color, name (blank for the detected
   one), path ("auto-detected", the drive, or the chosen path) and "Icon shows", each with
@@ -220,7 +228,7 @@ are Tray icons, Alerts, Clean up and General.
   distro, each fixed drive), then File… and Folder….
 - **Detection:** WSL distros, Docker Desktop data disk, daily large-file scan and
   its threshold, show "Other large files" in the flyout, and the "Code folders to
-  search" list.
+  search" list (Add folder… starts in `\\wsl.localhost`).
 - **Alerts:** warning and critical levels, notify when free space drops below a
   level, and the daily reminder time.
 - **Clean up:** what the Clean up dialog starts with: clear the build cache, remove
@@ -258,8 +266,9 @@ are Tray icons, Alerts, Clean up and General.
     reports a disk that stays in use (something started WSL again) without compacting
     it.
 - **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
-  readings in `usage.json`, what alerts have fired in `alerts.json` and Compose
-  projects' folders in `projects.json` there, and logs go to
+  readings in `usage.json`, what alerts have fired in `alerts.json`, Compose
+  projects' folders in `projects.json` and the last large-file scan in
+  `largefiles.json` there, and logs go to
   `%LOCALAPPDATA%\DiskTray\logs\disktray.log` (the Compactor's lines included).
 - **Install location.** The app runs from `%LOCALAPPDATA%\Programs\DiskTray\` (the usual
   place for per-user installs), not from `\\wsl.localhost\…`, because it has to keep

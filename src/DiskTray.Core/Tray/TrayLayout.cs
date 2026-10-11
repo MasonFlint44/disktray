@@ -24,6 +24,8 @@ public static class TrayLayout
 {
     public const string DriveKey = "drive";
 
+    private const string TurnedOff = "Turned off in Settings › Detection";
+
     /// <summary>Windows cuts tray tooltips off at 127 characters.</summary>
     public const int MaxToolTipLength = 127;
 
@@ -56,7 +58,9 @@ public static class TrayLayout
                 {
                     var file = snapshot.Docker;
                     items.Add(new TrayItem(pin, "docker", pin.Name ?? "Docker data", Colored(Palette.Docker), file, Drive(snapshot, file),
-                        file is null ? "Docker Desktop's data disk wasn't found" : null));
+                        file is not null ? null
+                        : snapshot.NotDetected.Contains(DiskKind.DockerData) ? TurnedOff
+                        : "Docker Desktop's data disk wasn't found"));
                     break;
                 }
 
@@ -66,7 +70,10 @@ public static class TrayLayout
                         ? snapshot.PrimaryDistro
                         : snapshot.Files.FirstOrDefault(f => f.Kind == DiskKind.WslDistro && string.Equals(f.Id, pin.Target, StringComparison.OrdinalIgnoreCase));
                     items.Add(new TrayItem(pin, file?.Id ?? "distro:" + (pin.Target ?? "primary"), pin.Name ?? file?.Name ?? "WSL distro",
-                        Colored(Palette.Wsl), file, Drive(snapshot, file), file is null ? "The WSL distro wasn't found" : null));
+                        Colored(Palette.Wsl), file, Drive(snapshot, file),
+                        file is not null ? null
+                        : snapshot.NotDetected.Contains(DiskKind.WslDistro) ? TurnedOff
+                        : "The WSL distro wasn't found"));
                     break;
                 }
 

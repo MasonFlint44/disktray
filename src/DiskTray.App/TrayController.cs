@@ -7,6 +7,7 @@ using DiskTray.Core;
 using DiskTray.Core.Alerts;
 using DiskTray.Core.Cleanup;
 using DiskTray.Core.Flyout;
+using DiskTray.Core.Detection;
 using DiskTray.Core.Settings;
 using DiskTray.Core.Tray;
 using H.NotifyIcon;
@@ -28,6 +29,7 @@ internal sealed class TrayController : IDisposable
     private readonly bool _dryRun;
     private readonly DockerExe _docker = new();
     private readonly WslExe _wsl = new();
+    private readonly LargeFileScanner _largeFiles;
     private readonly DispatcherTimer _reminderTimer;
     private readonly DispatcherTimer _timer;
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
@@ -58,6 +60,15 @@ internal sealed class TrayController : IDisposable
         ApplicationThemeManager.Changed += OnThemeChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
         Notifier.Clicked += OnNotificationClicked;
+        _largeFiles = new LargeFileScanner(settings.LargeFileScan, settings.LargeFileMinBytes);
+        _largeFiles.Changed += (_, _) => Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (_flyout?.IsVisible == true)
+            {
+                UpdateFlyout();
+            }
+        });
+
         // A folder's count finishing is worth showing without waiting for the next refresh.
         _monitor.Folders.Measured += (_, _) => Application.Current?.Dispatcher.BeginInvoke(async () => await RefreshAsync());
     }
@@ -80,7 +91,8 @@ internal sealed class TrayController : IDisposable
         try
         {
             var pins = _settings.Pins;
-            _snapshot = await Task.Run(() => _monitor.Measure(pins));
+            var detect = new DetectionOptions(_settings.DetectDistros, _settings.DetectDocker);
+            _snapshot = await Task.Run(() => _monitor.Measure(pins, detect));
             _problem = null;
             Redraw();
             CheckAlerts(UserIsActive());
@@ -102,6 +114,7 @@ internal sealed class TrayController : IDisposable
     {
         _timer.Stop();
         _reminderTimer.Stop();
+        _largeFiles.Dispose();
         ApplicationThemeManager.Changed -= OnThemeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;
         Notifier.Clicked -= OnNotificationClicked;
@@ -175,6 +188,7 @@ internal sealed class TrayController : IDisposable
             _flyout.SettingsRequested += (_, _) => OpenSettings();
             _flyout.CleanupRequested += (_, _) => OpenCleanup();
             _flyout.CancelCleanupRequested += (_, _) => _cleanupCancel?.Cancel();
+            _flyout.PinRequested += (_, path) => Pin(path);
         }
 
         // Nothing to show until the first refresh finishes, which takes about a second.
@@ -230,9 +244,24 @@ internal sealed class TrayController : IDisposable
     {
         if (_flyout is not null && _snapshot is not null)
         {
-            _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem, pins: _settings.Pins));
+            var largeFiles = _settings.LargeFileScan && _settings.ShowLargeFiles
+                ? new LargeFileListing(_largeFiles.Last, _settings.LargeFileMinBytes, _largeFiles.Scanning)
+                : null;
+            _flyout.Update(FlyoutLayout.Build(_snapshot, _settings.Thresholds, Themes.Current, DateTimeOffset.Now, _settings.RefreshInterval, _problem, pins: _settings.Pins, largeFiles: largeFiles));
             _flyout.ShowCleanup(_cleanupProgress?.Text, _cleanupProgress?.CanCancel == true);
         }
+    }
+
+    /// <summary>Pins a file from "Other large files" to the tray.</summary>
+    private void Pin(string path)
+    {
+        if (_settings.Pins.Count >= TrayPin.MaxPins)
+        {
+            return;
+        }
+
+        Log.Info($"Pinned {path} from the flyout");
+        SaveSettings(_settings with { Pins = TrayPin.Clean([.. _settings.Pins, new TrayPin(PinKind.Path, path)]) }, StartupRegistration.IsEnabled());
     }
 
     private async void OpenCleanup()
@@ -264,7 +293,8 @@ internal sealed class TrayController : IDisposable
 
         try
         {
-            var state = await Task.Run(() => new CleanupScanner(_docker, _wsl).Scan(snapshot));
+            var codeFolders = _settings.CodeFolders;
+            var state = await Task.Run(() => new CleanupScanner(_docker, _wsl).Scan(snapshot, codeFolders));
             if (_cleanupWindow == window)
             {
                 window.ShowScan(state);
@@ -368,6 +398,7 @@ internal sealed class TrayController : IDisposable
         }
 
         Themes.Choose(settings.Theme);
+        _largeFiles.Configure(settings.LargeFileScan, settings.LargeFileMinBytes);
         Redraw();
         CheckAlerts(UserIsActive());
         // New pins need measuring before their icons can show anything.

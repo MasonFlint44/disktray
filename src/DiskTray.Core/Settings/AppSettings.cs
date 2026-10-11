@@ -32,7 +32,8 @@ public sealed record AppSettings
 
     private static readonly AppSettings Defaults = new();
 
-    private readonly PinList _pins = new(TrayPin.Defaults);
+    private readonly ValueList<TrayPin> _pins = new(TrayPin.Defaults);
+    private readonly ValueList<string> _codeFolders = new([]);
 
     public AppTheme Theme { get; init; } = AppTheme.System;
 
@@ -42,8 +43,38 @@ public sealed record AppSettings
     public IReadOnlyList<TrayPin> Pins
     {
         get => _pins;
-        init => _pins = new PinList(value ?? TrayPin.Defaults);
+        init => _pins = new ValueList<TrayPin>(value ?? TrayPin.Defaults);
     }
+
+    /// <summary>Find WSL distros' disks in the WSL registry.</summary>
+    public bool DetectDistros { get; init; } = true;
+
+    /// <summary>Find Docker Desktop's data disk.</summary>
+    public bool DetectDocker { get; init; } = true;
+
+    /// <summary>Look through the user folder once a day for big files.</summary>
+    public bool LargeFileScan { get; init; } = true;
+
+    /// <summary>How big a file has to be for the scan to list it.</summary>
+    public int LargeFileMinGiB { get; init; } = 2;
+
+    public const int MaxLargeFileMinGiB = 1024;
+
+    /// <summary>Show the scan's files in the flyout's "Other large files".</summary>
+    public bool ShowLargeFiles { get; init; } = true;
+
+    /// <summary>
+    /// Folders whose subfolders are projects (<c>\\wsl.localhost\Ubuntu\home\me\git</c>),
+    /// searched by name to match Docker volumes to projects when no container records the folder.
+    /// </summary>
+    public IReadOnlyList<string> CodeFolders
+    {
+        get => _codeFolders;
+        init => _codeFolders = new ValueList<string>(value ?? []);
+    }
+
+    [JsonIgnore]
+    public long LargeFileMinBytes => (long)LargeFileMinGiB << 30;
 
     public int RefreshMinutes { get; init; } = 5;
 
@@ -147,7 +178,16 @@ public sealed record AppSettings
             settings = settings with { IconShape = Defaults.IconShape };
         }
 
-        settings = settings with { Pins = TrayPin.Clean(settings.Pins) };
+        settings = settings with
+        {
+            Pins = TrayPin.Clean(settings.Pins),
+            CodeFolders = settings.CodeFolders.Where(f => !string.IsNullOrWhiteSpace(f)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+        };
+
+        if (settings.LargeFileMinGiB is < 1 or > MaxLargeFileMinGiB)
+        {
+            settings = settings with { LargeFileMinGiB = Defaults.LargeFileMinGiB };
+        }
 
         if (!Enum.IsDefined(settings.CleanupCompactWhen))
         {
@@ -180,13 +220,13 @@ public sealed record AppSettings
             : string.Format(provider, minutes == 1 ? "{0} minute" : "{0} minutes", minutes);
     }
 
-    /// <summary>A list of pins that two settings compare by what's in it, not which list it is.</summary>
-    private sealed class PinList(IEnumerable<TrayPin> pins) : ReadOnlyCollection<TrayPin>(pins.ToList()), IEquatable<PinList>
+    /// <summary>A list that two settings compare by what's in it, not which list it is.</summary>
+    private sealed class ValueList<T>(IEnumerable<T> items) : ReadOnlyCollection<T>(items.ToList()), IEquatable<ValueList<T>>
     {
-        public bool Equals(PinList? other) => other is not null && this.SequenceEqual(other);
+        public bool Equals(ValueList<T>? other) => other is not null && this.SequenceEqual(other);
 
-        public override bool Equals(object? obj) => Equals(obj as PinList);
+        public override bool Equals(object? obj) => Equals(obj as ValueList<T>);
 
-        public override int GetHashCode() => this.Aggregate(0, (hash, pin) => HashCode.Combine(hash, pin));
+        public override int GetHashCode() => this.Aggregate(0, (hash, item) => HashCode.Combine(hash, item));
     }
 }

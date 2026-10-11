@@ -48,7 +48,7 @@
     <TabControl x:Name="Tabs" Grid.Row="1" Margin="16,4,16,0">
       <TabItem Header="Tray icons">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <StackPanel Margin="0,16,0,8">
+          <StackPanel Margin="0,16,14,8">
             <TextBlock Text="Icon shape" Style="{StaticResource Heading}" />
             <Border Style="{StaticResource Card}">
               <StackPanel Orientation="Horizontal">
@@ -77,6 +77,44 @@
               <ui:Button x:Name="AddPin" Content="Add…" Icon="{ui:SymbolIcon Add24}" Click="OnAddPin" />
               <TextBlock x:Name="AddHint" Style="{StaticResource Hint}" Margin="12,0,0,0" Text="All 3 are in use. Remove one to add another." Visibility="Collapsed" />
             </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Detection">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="0,16,14,8">
+            <TextBlock Text="Look for" Style="{StaticResource Heading}" />
+            <Border Style="{StaticResource Card}">
+              <StackPanel>
+                <CheckBox x:Name="DetectDistros" Content="WSL distros (from the WSL registry)" />
+                <CheckBox x:Name="DetectDocker" Content="Docker Desktop's data disk" Margin="0,8,0,0" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Large files" Style="{StaticResource Heading}" Margin="0,8,0,8" />
+            <Border Style="{StaticResource Card}">
+              <StackPanel>
+                <DockPanel>
+                  <TextBlock DockPanel.Dock="Right" Text="GiB" VerticalAlignment="Center" Margin="8,0,0,0" />
+                  <ui:NumberBox x:Name="LargeFileMin" DockPanel.Dock="Right" Width="120" Minimum="1" Maximum="1024" SmallChange="1" MaxDecimalPlaces="0"
+                                IsEnabled="{Binding IsChecked, ElementName=LargeFileScan}" AutomationProperties.Name="Smallest file to list, in GiB" />
+                  <CheckBox x:Name="LargeFileScan" Content="Look through my user folder daily for files over" VerticalAlignment="Center" />
+                </DockPanel>
+                <CheckBox x:Name="ShowLargeFiles" Content="Show them in the flyout under &quot;Other large files&quot;" Margin="0,10,0,0"
+                          IsEnabled="{Binding IsChecked, ElementName=LargeFileScan}" />
+                <TextBlock Margin="28,2,0,0" Style="{StaticResource Hint}" TextWrapping="Wrap"
+                           Text="Each one has a pin button to give it its own tray icon. Disks DiskTray already shows, and pinned items, are left out." />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Text="Code folders to search" Style="{StaticResource Heading}" Margin="0,8,0,2" />
+            <TextBlock Style="{StaticResource Hint}" TextWrapping="Wrap" Margin="0,0,0,8"
+                       Text="Clean up matches unused Docker volumes to project folders by name here when no container records the folder. Folders in a distro are only searched while it's running." />
+            <StackPanel x:Name="CodeFolderRows" />
+            <TextBlock x:Name="NoCodeFolders" Style="{StaticResource Hint}" Margin="0,0,0,8"
+                       Text="None yet. Clean up still searches the folders its recorded projects are in." />
+            <ui:Button Content="Add folder…" Icon="{ui:SymbolIcon FolderAdd24}" Click="OnAddCodeFolder" HorizontalAlignment="Left" />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

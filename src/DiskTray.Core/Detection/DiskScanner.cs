@@ -7,6 +7,9 @@ namespace DiskTray.Core.Detection;
 /// <param name="AppData"><c>%APPDATA%</c> (roaming)</param>
 public sealed record ScanPaths(string SystemDriveRoot, string LocalAppData, string AppData);
 
+/// <summary>Which disk files to look for, from Settings › Detection.</summary>
+public sealed record DetectionOptions(bool Distros = true, bool Docker = true);
+
 /// <summary>
 /// Finds the Docker and WSL disk files and measures them and their drives, plus the files,
 /// folders and drives pinned to the tray. Only reads file sizes, so it never starts WSL or
@@ -14,19 +17,21 @@ public sealed record ScanPaths(string SystemDriveRoot, string LocalAppData, stri
 /// </summary>
 public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPaths paths, TimeProvider clock, IFolderSizes? folders = null)
 {
-    public DiskSnapshot Scan(IReadOnlyList<TrayPin>? pins = null)
+    public DiskSnapshot Scan(IReadOnlyList<TrayPin>? pins = null, DetectionOptions? detect = null)
     {
         pins ??= TrayPin.Defaults;
-        var registryData = registry.Read();
+        detect ??= new DetectionOptions();
+        // Docker's legacy data distro is in the WSL registry too, so read it either way.
+        var registryData = detect.Distros || detect.Docker ? registry.Read() : WslRegistryData.Empty;
         var distros = WslDistros.FromRegistry(registryData);
         var files = new List<DiskFile>();
 
-        if (FindDockerData(distros) is { } docker)
+        if (detect.Docker && FindDockerData(distros) is { } docker)
         {
             files.Add(docker);
         }
 
-        foreach (var distro in distros.Where(d => !d.IsDockerOwned))
+        foreach (var distro in distros.Where(d => detect.Distros && !d.IsDockerOwned))
         {
             if (probe.GetFileSize(distro.VhdxPath) is { } size)
             {
@@ -58,7 +63,21 @@ public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPat
             }
         }
 
-        return new DiskSnapshot(clock.GetUtcNow(), systemDrive, drives, files, PickPrimaryDistro(files, registryData.DefaultDistributionId));
+        var notDetected = new HashSet<DiskKind>();
+        if (!detect.Docker)
+        {
+            notDetected.Add(DiskKind.DockerData);
+        }
+
+        if (!detect.Distros)
+        {
+            notDetected.Add(DiskKind.WslDistro);
+        }
+
+        return new DiskSnapshot(clock.GetUtcNow(), systemDrive, drives, files, PickPrimaryDistro(files, registryData.DefaultDistributionId))
+        {
+            NotDetected = notDetected,
+        };
     }
 
     /// <summary>The ID a pinned path's file has in a snapshot.</summary>

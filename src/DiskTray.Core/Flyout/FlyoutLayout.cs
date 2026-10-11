@@ -1,4 +1,5 @@
 using System.Globalization;
+using DiskTray.Core.Detection;
 using DiskTray.Core.Tray;
 
 namespace DiskTray.Core.Flyout;
@@ -16,6 +17,15 @@ public sealed record FlyoutBanner(AlertLevel Level, string Text);
 /// <summary>One legend row: a swatch, a name and a size, with an optional second line.</summary>
 public sealed record LegendItem(string Name, string Size, Rgb Color, string? Detail = null);
 
+/// <summary>What "Other large files" lists: the last scan (null before the first) and the size threshold.</summary>
+/// <param name="Scanning">A scan is running now.</param>
+public sealed record LargeFileListing(LargeFileScan? Scan, long MinBytes, bool Scanning = false);
+
+/// <summary>A file the large-file scan found, for "Other large files".</summary>
+/// <param name="Folder">Where it is, e.g. <c>C:\Users\me\VMs</c>.</param>
+/// <param name="CanPin">False when all the tray's pins are in use.</param>
+public sealed record LargeFileLine(string Path, string Name, string Size, string Folder, bool CanPin);
+
 /// <summary>Everything the flyout shows, already worded and colored.</summary>
 public sealed record FlyoutModel(
     string DriveLine,
@@ -27,7 +37,16 @@ public sealed record FlyoutModel(
     bool ShowsReclaimable,
     string? ReclaimableTotal,
     string? ReclaimableBreakdown,
-    string Footer);
+    string Footer)
+{
+    /// <summary>Whether to show "Other large files" at all: the scan is on and the flyout lists them.</summary>
+    public bool ShowsLargeFiles { get; init; }
+
+    public IReadOnlyList<LargeFileLine> LargeFiles { get; init; } = [];
+
+    /// <summary>"Files over 2.0 GiB in your user folder · scanned 9:14 AM · 3 more not shown", or why there's nothing yet.</summary>
+    public string? LargeFilesNote { get; init; }
+}
 
 /// <summary>
 /// Works out the flyout for the system drive: the pinned items on it, with each disk file
@@ -40,6 +59,7 @@ public static class FlyoutLayout
     /// <param name="refreshInterval">How often the tray checks, for the footer.</param>
     /// <param name="problem">Why the last refresh failed, if it did.</param>
     /// <param name="pins">What's pinned to the tray, or null for <see cref="TrayPin.Defaults"/>.</param>
+    /// <param name="largeFiles">What to list under "Other large files", or null to leave it out.</param>
     public static FlyoutModel Build(
         DiskSnapshot snapshot,
         AlertThresholds thresholds,
@@ -49,7 +69,8 @@ public static class FlyoutLayout
         string? problem = null,
         IFormatProvider? provider = null,
         TimeZoneInfo? zone = null,
-        IReadOnlyList<TrayPin>? pins = null)
+        IReadOnlyList<TrayPin>? pins = null,
+        LargeFileListing? largeFiles = null)
     {
         provider ??= CultureInfo.CurrentCulture;
         zone ??= TimeZoneInfo.Local;
@@ -115,7 +136,46 @@ public static class FlyoutLayout
             reclaimableTotal > 0
                 ? string.Join(" · ", reclaimable.Select(i => $"{TrayLayout.ShortName(i)} {Size(i.File!.ReclaimableBytes ?? 0)}"))
                 : null,
-            Footer(snapshot.TakenAt, now, refreshInterval, zone, provider));
+            Footer(snapshot.TakenAt, now, refreshInterval, zone, provider))
+        {
+            ShowsLargeFiles = largeFiles is not null,
+            LargeFiles = largeFiles is null ? [] : LargeFileLines(largeFiles, snapshot, pins ?? TrayPin.Defaults, provider),
+            LargeFilesNote = largeFiles is null ? null : LargeFilesNote(largeFiles, snapshot, pins ?? TrayPin.Defaults, now, zone, provider),
+        };
+    }
+
+    private static IReadOnlyList<LargeFileLine> LargeFileLines(LargeFileListing listing, DiskSnapshot snapshot, IReadOnlyList<TrayPin> pins, IFormatProvider provider)
+    {
+        if (listing.Scan is not { } scan)
+        {
+            return [];
+        }
+
+        bool canPin = pins.Count < TrayPin.MaxPins;
+        return scan.Others(snapshot, pins, listing.MinBytes)
+            .Take(LargeFileScan.Shown)
+            .Select(f =>
+            {
+                string name = WindowsPath.GetName(f.Path);
+                string folder = f.Path.Length > name.Length ? f.Path[..^name.Length].TrimEnd('\\') : "";
+                return new LargeFileLine(f.Path, name, ByteSize.Format(f.SizeBytes, provider), folder, canPin);
+            })
+            .ToList();
+    }
+
+    /// <summary>"Files over 2.0 GiB in your user folder · scanned 9:14 AM", plus "· 3 more not shown".</summary>
+    private static string LargeFilesNote(LargeFileListing listing, DiskSnapshot snapshot, IReadOnlyList<TrayPin> pins, DateTimeOffset now, TimeZoneInfo zone, IFormatProvider provider)
+    {
+        string over = $"over {ByteSize.Format(listing.MinBytes, provider)} in your user folder";
+        if (listing.Scan is not { } scan)
+        {
+            return listing.Scanning ? $"Looking for files {over}…" : $"Files {over} show here after the daily scan";
+        }
+
+        int count = scan.Others(snapshot, pins, listing.MinBytes).Count;
+        string note = count == 0 ? $"No other files {over}" : $"Files {over}";
+        note += listing.Scanning ? " · scanning…" : $" · scanned {TrayLayout.AsOf(scan.ScannedAt, now, zone, provider)}";
+        return count > LargeFileScan.Shown ? $"{note} · {count - LargeFileScan.Shown} more not shown" : note;
     }
 
     /// <summary>"34 GiB used · 94 GiB reclaimable", or how to get those numbers.</summary>
