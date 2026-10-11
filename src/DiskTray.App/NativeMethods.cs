@@ -20,6 +20,73 @@ internal static partial class NativeMethods
         return size > 0 ? size : 16;
     }
 
+    private const uint MONITOR_DEFAULTTONEAREST = 2;
+    private const uint SWP_NOSIZE = 0x0001;
+    private const uint SWP_NOZORDER = 0x0004;
+    private const uint SWP_NOACTIVATE = 0x0010;
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Point
+    {
+        public int X;
+        public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public int Size;
+        public Rect Monitor;
+        public Rect Work;
+        public uint Flags;
+    }
+
+    /// <summary>Where the mouse is, in screen pixels.</summary>
+    public static Point CursorPosition() => GetCursorPos(out var point) ? point : default;
+
+    /// <summary>The whole monitor nearest <paramref name="point"/>, and its work area (the part the taskbar leaves).</summary>
+    public static (Rect Monitor, Rect Work)? MonitorAreas(Point point)
+    {
+        var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+        nint monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        return monitor != 0 && GetMonitorInfo(monitor, ref info) ? (info.Monitor, info.Work) : null;
+    }
+
+    public static Rect WindowRect(nint hwnd) => GetWindowRect(hwnd, out var rect) ? rect : default;
+
+    public static uint DpiOf(nint hwnd) => GetDpiForWindow(hwnd) is var dpi and > 0 ? dpi : 96;
+
+    public static void MoveWindow(nint hwnd, int x, int y) =>
+        SetWindowPos(hwnd, 0, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetCursorPos(out Point point);
+
+    [LibraryImport("user32.dll")]
+    private static partial nint MonitorFromPoint(Point point, uint flags);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetWindowRect(nint hwnd, out Rect rect);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, uint flags);
+
     [LibraryImport("user32.dll", EntryPoint = "FindWindowW", StringMarshalling = StringMarshalling.Utf16)]
     private static partial nint FindWindow(string? className, string? windowName);
 

@@ -52,6 +52,9 @@ The tint is the item color mixed halfway with white. The free slice next to it i
 gray, so a darker shade blended into it (about 1.3 : 1) on both dark and light taskbars;
 the tint stands out (about 6 : 1). The icons look the same on either taskbar theme.
 
+The flyout follows the app theme. On a light background, Windows & other is `#8C8C8C`
+and free is `#E0E0E0`, so free stays the lightest slice.
+
 Each pinned item has a color picker, and its tint is derived from the chosen color.
 
 ## Detection
@@ -182,7 +185,8 @@ Volume labels only carry `com.docker.compose.project` (dots stripped, e.g.
   closes the running copy cleanly, so its icons leave the tray (used by
   `scripts/deploy.sh`, and later by updates).
 - **`DiskTray.exe --render-icons <folder>`** saves the current icons as PNGs at several
-  sizes plus their tooltips, for checking the drawing without the tray.
+  sizes plus their tooltips, and the flyout in light and dark, for checking the drawing
+  without the tray.
 - **Build.** `EnableWindowsTargeting` lets everything build from WSL. The app only
   runs on Windows. Tests use xUnit v3 on Microsoft.Testing.Platform (opted in through
   `global.json`).

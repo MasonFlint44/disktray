@@ -1,0 +1,167 @@
+using System.Globalization;
+using DiskTray.Core.Tray;
+
+namespace DiskTray.Core.Flyout;
+
+/// <summary>Whether the flyout is drawn on a dark or a light background.</summary>
+public enum SurfaceTheme
+{
+    Dark,
+    Light,
+}
+
+/// <summary>A banner at the top of the flyout, for low free space or a failed refresh.</summary>
+public sealed record FlyoutBanner(AlertLevel Level, string Text);
+
+/// <summary>One legend row: a swatch, a name and a size, with an optional second line.</summary>
+public sealed record LegendItem(string Name, string Size, Rgb Color, string? Detail = null);
+
+/// <summary>Everything the flyout shows, already worded and colored.</summary>
+public sealed record FlyoutModel(
+    string DriveLine,
+    IReadOnlyList<FlyoutBanner> Banners,
+    PieChart Donut,
+    string DonutDescription,
+    string FreeSize,
+    IReadOnlyList<LegendItem> Legend,
+    bool ShowsReclaimable,
+    string? ReclaimableTotal,
+    string? ReclaimableBreakdown,
+    string Footer);
+
+/// <summary>
+/// Works out the flyout for the system drive: the same items as the drive's tray icon, with
+/// each disk file split into used and reclaimable space when that's known.
+/// </summary>
+public static class FlyoutLayout
+{
+    /// <param name="now">The current time, so "Updated" can show a date once the reading is a day old.</param>
+    /// <param name="refreshInterval">How often the tray checks, for the footer.</param>
+    /// <param name="problem">Why the last refresh failed, if it did.</param>
+    public static FlyoutModel Build(
+        DiskSnapshot snapshot,
+        AlertThresholds thresholds,
+        SurfaceTheme theme,
+        DateTimeOffset now,
+        TimeSpan refreshInterval,
+        string? problem = null,
+        IFormatProvider? provider = null,
+        TimeZoneInfo? zone = null)
+    {
+        provider ??= CultureInfo.CurrentCulture;
+        zone ??= TimeZoneInfo.Local;
+        var drive = snapshot.SystemDrive;
+        var files = TrayLayout.PinnedFilesOn(snapshot, drive);
+        long other = TrayLayout.OtherBytes(drive, files);
+        var otherColor = theme == SurfaceTheme.Light ? Palette.OtherOnLight : Palette.Other;
+        var freeColor = theme == SurfaceTheme.Light ? Palette.FreeOnLight : Palette.Free;
+        string Size(long bytes) => ByteSize.Format(bytes, provider);
+
+        var amounts = new List<(long Bytes, Rgb Color)>();
+        var legend = new List<LegendItem>();
+        foreach (var file in files)
+        {
+            var color = Palette.For(file.Kind);
+            if (file.UsedBytes is { } used)
+            {
+                amounts.Add((Math.Min(used, file.SizeBytes), color.Main));
+                amounts.Add((file.ReclaimableBytes ?? 0, color.Reclaimable));
+            }
+            else
+            {
+                amounts.Add((file.SizeBytes, color.Main));
+            }
+
+            legend.Add(new LegendItem(file.Name, Size(file.SizeBytes), color.Main, Detail(file, now, zone, provider)));
+        }
+
+        amounts.Add((other, otherColor));
+        amounts.Add((drive.FreeBytes, freeColor));
+        legend.Add(new LegendItem("Windows & other", Size(other), otherColor));
+        legend.Add(new LegendItem("Free", Size(drive.FreeBytes), freeColor));
+
+        var banners = new List<FlyoutBanner>();
+        if (problem is not null)
+        {
+            banners.Add(new FlyoutBanner(AlertLevel.Critical, problem));
+        }
+
+        if (LowSpaceBanner(drive, thresholds, provider) is { } low)
+        {
+            banners.Add(low);
+        }
+
+        var reclaimable = files.Where(f => f.ReclaimableBytes > 0).ToList();
+        long reclaimableTotal = reclaimable.Sum(f => f.ReclaimableBytes ?? 0);
+
+        return new FlyoutModel(
+            $"Drive {drive.Label} · {Size(drive.TotalBytes)}",
+            banners,
+            PieChart.FromAmounts(amounts, thresholds.Classify(drive)),
+            Description(drive, files, other, provider),
+            Size(drive.FreeBytes),
+            legend,
+            files.Any(f => f.ReclaimableBytes > 0),
+            reclaimableTotal > 0 ? Size(reclaimableTotal) : null,
+            reclaimableTotal > 0
+                ? string.Join(" · ", reclaimable.Select(f => $"{TrayLayout.ShortName(f)} {Size(f.ReclaimableBytes ?? 0)}"))
+                : null,
+            Footer(snapshot.TakenAt, now, refreshInterval, zone, provider));
+    }
+
+    /// <summary>"34 GiB used · 94 GiB reclaimable", or how to get those numbers.</summary>
+    internal static string? Detail(DiskFile file, DateTimeOffset now, TimeZoneInfo zone, IFormatProvider provider)
+    {
+        if (file.UsedBytes is { } used)
+        {
+            string detail = $"{ByteSize.Format(Math.Min(used, file.SizeBytes), provider)} used · {ByteSize.Format(file.ReclaimableBytes ?? 0, provider)} reclaimable";
+            return file.UsedAsOf is { } measuredAt ? $"{detail} · as of {TrayLayout.AsOf(measuredAt, now, zone, provider)}" : detail;
+        }
+
+        if (file.UsageMount is null)
+        {
+            return null;
+        }
+
+        // Only distros that are already running get measured.
+        string runs = file.Kind == DiskKind.DockerData ? "Docker Desktop runs" : $"{file.Name} runs";
+        return $"Shows what's reclaimable once {runs}";
+    }
+
+    /// <summary>"50 GiB free (11%) – below your 15% warning level", or null when there's room.</summary>
+    internal static FlyoutBanner? LowSpaceBanner(DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
+    {
+        string free = $"{ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider)})";
+        return thresholds.Classify(drive) switch
+        {
+            AlertLevel.Critical => new FlyoutBanner(
+                AlertLevel.Critical,
+                $"{free} – below your {ByteSize.FormatPercent(thresholds.CriticalFreeFraction, provider)} critical level"),
+            AlertLevel.Warning => new FlyoutBanner(
+                AlertLevel.Warning,
+                $"{free} – below your {ByteSize.FormatPercent(thresholds.WarningFreeFraction, provider)} warning level"),
+            _ => null,
+        };
+    }
+
+    /// <summary>"Updated 1:41 PM · checks every 5 min".</summary>
+    internal static string Footer(DateTimeOffset takenAt, DateTimeOffset now, TimeSpan interval, TimeZoneInfo zone, IFormatProvider provider)
+    {
+        string every = interval.TotalMinutes < 60
+            ? string.Format(provider, "{0:0} min", interval.TotalMinutes)
+            : string.Format(provider, "{0:0.#} h", interval.TotalHours);
+        return $"Updated {TrayLayout.AsOf(takenAt, now, zone, provider)} · checks every {every}";
+    }
+
+    /// <summary>For screen readers: "Drive C: 27% Docker data, 13% Ubuntu, 49% Windows &amp; other, 11% free".</summary>
+    private static string Description(DriveSpace drive, IEnumerable<DiskFile> files, long other, IFormatProvider provider)
+    {
+        string Part(long bytes, string name) =>
+            $"{ByteSize.FormatPercent(drive.TotalBytes > 0 ? (double)bytes / drive.TotalBytes : 0, provider)} {name}";
+
+        var parts = files.Select(f => Part(f.SizeBytes, f.Name))
+            .Append(Part(other, "Windows & other"))
+            .Append(Part(drive.FreeBytes, "free"));
+        return $"Drive {drive.Label} {string.Join(", ", parts)}";
+    }
+}

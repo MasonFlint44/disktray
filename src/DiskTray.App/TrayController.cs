@@ -4,12 +4,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using DiskTray.Core;
+using DiskTray.Core.Flyout;
 using DiskTray.Core.Tray;
 using H.NotifyIcon;
+using Wpf.Ui.Appearance;
 
 namespace DiskTray.App;
 
-/// <summary>Owns the tray icons and refreshes them on a timer.</summary>
+/// <summary>Owns the tray icons and the flyout, and refreshes them on a timer.</summary>
 internal sealed class TrayController : IDisposable
 {
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(5);
@@ -21,6 +23,7 @@ internal sealed class TrayController : IDisposable
     private readonly Dictionary<string, System.Drawing.Icon> _images = [];
     private bool _refreshing;
     private DiskSnapshot? _snapshot;
+    private FlyoutWindow? _flyout;
 
     // Why the last refresh failed, shown in every tooltip until one succeeds.
     private string? _problem;
@@ -30,6 +33,7 @@ internal sealed class TrayController : IDisposable
         _monitor = monitor;
         _timer = new DispatcherTimer { Interval = RefreshInterval };
         _timer.Tick += async (_, _) => await RefreshAsync();
+        ApplicationThemeManager.Changed += OnThemeChanged;
     }
 
     public async Task StartAsync()
@@ -68,6 +72,8 @@ internal sealed class TrayController : IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        ApplicationThemeManager.Changed -= OnThemeChanged;
+        _flyout?.Close();
         foreach (var icon in _icons.Values)
         {
             icon.Dispose();
@@ -107,6 +113,48 @@ internal sealed class TrayController : IDisposable
             _images.Remove(key, out var image);
             image?.Dispose();
         }
+
+        if (_flyout?.IsVisible == true)
+        {
+            UpdateFlyout();
+        }
+    }
+
+    private void ToggleFlyout()
+    {
+        _flyout ??= new FlyoutWindow();
+        if (_flyout.IsVisible)
+        {
+            _flyout.Dismiss(fromDeactivate: false);
+            return;
+        }
+
+        // Nothing to show until the first refresh finishes, which takes about a second.
+        if (_flyout.JustClosed || _snapshot is null)
+        {
+            return;
+        }
+
+        Themes.Apply();
+        UpdateFlyout();
+        _flyout.ShowAt(NativeMethods.CursorPosition());
+    }
+
+    private void UpdateFlyout()
+    {
+        if (_flyout is not null && _snapshot is not null)
+        {
+            _flyout.Update(FlyoutLayout.Build(_snapshot, _thresholds, Themes.Current, DateTimeOffset.Now, RefreshInterval, _problem));
+        }
+    }
+
+    // The donut's gray slices differ between light and dark.
+    private void OnThemeChanged(ApplicationTheme theme, System.Windows.Media.Color accent)
+    {
+        if (_flyout?.IsVisible == true)
+        {
+            UpdateFlyout();
+        }
     }
 
     private void SetIcon(string key, System.Drawing.Icon image, string toolTip)
@@ -126,6 +174,7 @@ internal sealed class TrayController : IDisposable
                 ContextMenu = BuildMenu(),
                 NoLeftClickDelay = true,
             };
+            icon.TrayLeftMouseUp += (_, _) => ToggleFlyout();
             icon.ForceCreate(enablesEfficiencyMode: false);
             _icons[key] = icon;
         }
@@ -143,6 +192,7 @@ internal sealed class TrayController : IDisposable
     {
         var refresh = new MenuItem { Header = "Refresh now" };
         refresh.Click += async (_, _) => await RefreshAsync();
+
         var exit = new MenuItem { Header = "Exit" };
         exit.Click += (_, _) => Application.Current.Shutdown();
         return new ContextMenu { Items = { refresh, new Separator(), exit } };

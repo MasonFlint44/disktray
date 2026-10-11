@@ -45,6 +45,10 @@ public static class Palette
     public static readonly ItemColor Wsl = new(Rgb.FromHex("#E95420"));
     public static readonly Rgb Other = Rgb.FromHex("#D0D0D0");
     public static readonly Rgb Free = Rgb.FromHex("#3A3A3A");
+
+    /// <summary>Other and free on a light background (the flyout in light theme), where free stays the lightest.</summary>
+    public static readonly Rgb OtherOnLight = Rgb.FromHex("#8C8C8C");
+    public static readonly Rgb FreeOnLight = Rgb.FromHex("#E0E0E0");
     public static readonly Rgb Outline = Rgb.FromHex("#5A5A5A");
     public static readonly Rgb Warning = Rgb.FromHex("#F0B040");
     public static readonly Rgb Critical = Rgb.FromHex("#E5534B");

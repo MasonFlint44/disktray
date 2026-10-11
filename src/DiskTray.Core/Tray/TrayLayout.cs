@@ -73,10 +73,8 @@ public static class TrayLayout
     internal static TrayIconModel DriveIcon(DiskSnapshot snapshot, AlertThresholds thresholds, IFormatProvider provider)
     {
         var drive = snapshot.SystemDrive;
-        var onDrive = PinnedFiles(snapshot)
-            .Where(f => string.Equals(f.DriveRoot, drive.Root, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        long other = Math.Max(0, drive.TotalBytes - drive.FreeBytes - onDrive.Sum(f => f.SizeBytes));
+        var onDrive = PinnedFilesOn(snapshot, drive);
+        long other = OtherBytes(drive, onDrive);
 
         var amounts = onDrive.Select(f => (f.SizeBytes, Palette.For(f.Kind).Main))
             .Append((other, Palette.Other))
@@ -91,6 +89,16 @@ public static class TrayLayout
             PieChart.FromAmounts(amounts, thresholds.Classify(drive)),
             ToolTip($"Drive {drive.Label} · {ByteSize.Format(drive.TotalBytes, provider)}", breakdown, FreeLine(drive, thresholds, provider)));
     }
+
+    /// <summary>The pinned files on <paramref name="drive"/>, which get their own slices of it.</summary>
+    internal static IReadOnlyList<DiskFile> PinnedFilesOn(DiskSnapshot snapshot, DriveSpace drive) =>
+        PinnedFiles(snapshot)
+            .Where(f => string.Equals(f.DriveRoot, drive.Root, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    /// <summary>Everything on the drive that isn't free or one of <paramref name="files"/>.</summary>
+    internal static long OtherBytes(DriveSpace drive, IEnumerable<DiskFile> files) =>
+        Math.Max(0, drive.TotalBytes - drive.FreeBytes - files.Sum(f => f.SizeBytes));
 
     /// <summary>"C: 50 GiB free (11%)", plus "– below 15% warning" when low.</summary>
     internal static string FreeLine(DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
@@ -117,7 +125,7 @@ public static class TrayLayout
         return then.Year == today.Year ? then.ToString("MMM d", provider) : then.ToString("d", provider);
     }
 
-    private static string ShortName(DiskFile file) => file.Kind == DiskKind.DockerData ? "Docker" : file.Name;
+    internal static string ShortName(DiskFile file) => file.Kind == DiskKind.DockerData ? "Docker" : file.Name;
 
     /// <summary>
     /// Joins lines, dropping middle lines (then cutting the text) until it fits, so the
