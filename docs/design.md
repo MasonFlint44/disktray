@@ -23,12 +23,13 @@ difference is *reclaimable* and is shown as a darker shade of the item's color.
   - "Icon shows" option: **Drive breakdown** (default) or **Used vs free**.
 - **Warning indicator.** An amber ring or outline when free space is below the
   warning level, red below the critical level.
-- **Tooltip.** For example: `Docker data · 129 GB (75 GB reclaimable)` /
-  `C: 50 GB free (11%) – below 15% warning`. The drive icon adds a breakdown line
-  (`Docker 129 GB · Ubuntu 60 GB · Other 233 GB`). Windows cuts tooltips off at 127
+- **Tooltip.** For example: `Docker data · 129 GiB (75 GiB reclaimable)` /
+  `C: 50 GiB free (11%) – below 15% warning`. The drive icon adds a breakdown line
+  (`Docker 129 GiB · Ubuntu 60 GiB · Other 233 GiB`). Windows cuts tooltips off at 127
   characters, so a long one drops its middle lines first.
-- **Sizes** use Explorer's convention: 1024-based units labelled GB, one decimal below
-  10 and whole numbers from 10 up, so the numbers match what Explorer shows.
+- **Sizes** are 1024-based and labelled GiB (also KiB, MiB, TiB), with one decimal below
+  10 and whole numbers from 10 up. The numbers match Explorer, which counts the same
+  way but labels them GB.
 - **Default icons** (until Settings exists): the Docker data disk, the primary WSL
   distro (WSL's default distro, or else the largest), and drive C:.
 - Icons are drawn at the taskbar's DPI (16 px at 100%, 24 at 150%, 32 at 200%). Each
@@ -64,7 +65,7 @@ chosen color.
 - **Other drives.** A disk file on another drive is measured against that drive's free
   space, and isn't part of the C: breakdown.
 - **Large-file scan.** Daily scan of the user folder for files over a threshold
-  (default 2 GB) such as `.vhdx`, `.vhd`, `.vmdk` and `.qcow2`. Large files that
+  (default 2 GiB) such as `.vhdx`, `.vhd`, `.vmdk` and `.qcow2`. Large files that
   aren't pinned show up in the flyout's "Other large files" section, which can be
   toggled off, and each has a pin button.
 - **"Used inside" numbers.** Queried from WSL/Docker (e.g. `df`, `docker system df`)
@@ -74,18 +75,18 @@ chosen color.
 
 ## Flyout (left-click a tray icon)
 
-- Header: "Disk usage · Drive C: · 472 GB" and a settings gear.
-- A warning banner when below a level, e.g. "51 GB free (11%) – below your 15% warning".
+- Header: "Disk usage · Drive C: · 472 GiB" and a settings gear.
+- A warning banner when below a level, e.g. "51 GiB free (11%) – below your 15% warning".
 - A donut of the whole drive with free space in the center, and a legend listing
   each item's size plus "N used · N reclaimable".
 - "Darker shade = space a disk file is holding but not using."
-- "Other large files" (over 2 GB, not pinned), each with a pin button. Can be toggled.
+- "Other large files" (over 2 GiB, not pinned), each with a pin button. Can be toggled.
 - "Reclaimable by compacting" total, and one **Clean up…** button.
 - Footer: "Updated 1:41 PM · checks every 5 min".
 
 ## Alerts
 
-- **Warning** at 15% free (≈71 GB on a 472 GB drive). **Critical** at 5% (≈24 GB).
+- **Warning** at 15% free (≈71 GiB on a 472 GiB drive). **Critical** at 5% (≈24 GiB).
 - A toast fires as soon as free space drops below a level.
 - While still low, a daily reminder shows the first time the user is active
   (activity, unlock or login) after a set time (default 9:00 AM).
@@ -111,7 +112,7 @@ Nothing runs until the user clicks **Clean up**.
    - Takes about 10–20 min, asks for admin, and restarts Docker Desktop afterwards
      (optional).
 - **Footer.** The **Clean up** button has a fixed width and label and is disabled
-  when nothing is selected. The left side shows a summary ("C: gets back ~152 GB")
+  when nothing is selected. The left side shows a summary ("C: gets back ~152 GiB")
   and a plan ("Prunes now, compacts when WSL is idle").
 
 ### Volume confidence

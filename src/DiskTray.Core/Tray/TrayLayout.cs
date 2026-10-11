@@ -79,7 +79,7 @@ public static class TrayLayout
             ToolTip($"Drive {drive.Label} · {ByteSize.Format(drive.TotalBytes, provider)}", breakdown, FreeLine(drive, thresholds, provider)));
     }
 
-    /// <summary>"C: 50 GB free (11%)", plus "– below 15% warning" when low.</summary>
+    /// <summary>"C: 50 GiB free (11%)", plus "– below 15% warning" when low.</summary>
     internal static string FreeLine(DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
     {
         string line = $"{drive.Label} {ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider)})";

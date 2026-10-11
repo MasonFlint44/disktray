@@ -51,10 +51,10 @@ public class TrayLayoutTests
     {
         var icons = Build(Machine.Scan());
 
-        Assert.Equal("Docker data · 129 GB\nC: 50 GB free (11%) – below 15% warning", icons[0].ToolTip);
-        Assert.Equal("Ubuntu · 60 GB\nC: 50 GB free (11%) – below 15% warning", icons[1].ToolTip);
+        Assert.Equal("Docker data · 129 GiB\nC: 50 GiB free (11%) – below 15% warning", icons[0].ToolTip);
+        Assert.Equal("Ubuntu · 60 GiB\nC: 50 GiB free (11%) – below 15% warning", icons[1].ToolTip);
         Assert.Equal(
-            "Drive C: · 472 GB\nDocker 129 GB · Ubuntu 60 GB · Other 233 GB\nC: 50 GB free (11%) – below 15% warning",
+            "Drive C: · 472 GiB\nDocker 129 GiB · Ubuntu 60 GiB · Other 233 GiB\nC: 50 GiB free (11%) – below 15% warning",
             icons[2].ToolTip);
         Assert.All(icons, i => Assert.Equal(AlertLevel.Warning, i.Chart.Alert));
     }
@@ -130,7 +130,7 @@ public class TrayLayoutTests
         Assert.All(icons, i => Assert.True(i.ToolTip.Length <= TrayLayout.MaxToolTipLength, i.ToolTip));
         Assert.EndsWith("…", icons[1].ToolTip);
         // The drive icon drops its breakdown line rather than cutting off the free-space line.
-        Assert.Equal("Drive C: · 472 GB\nC: 50 GB free (11%) – below 15% warning", icons[2].ToolTip);
+        Assert.Equal("Drive C: · 472 GiB\nC: 50 GiB free (11%) – below 15% warning", icons[2].ToolTip);
     }
 }
 

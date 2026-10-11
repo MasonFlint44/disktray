@@ -3,12 +3,13 @@ using System.Globalization;
 namespace DiskTray.Core;
 
 /// <summary>
-/// Formats sizes the way Explorer does: 1024-based units labelled KB/MB/GB/TB.
-/// One decimal below 10, whole numbers from 10 up ("2.8 GB", "129 GB").
+/// Formats sizes in 1024-based units labelled KiB/MiB/GiB/TiB. The numbers match Explorer,
+/// which counts the same way but labels them KB/MB/GB/TB.
+/// One decimal below 10, whole numbers from 10 up ("2.8 GiB", "129 GiB").
 /// </summary>
 public static class ByteSize
 {
-    private static readonly string[] Units = ["bytes", "KB", "MB", "GB", "TB"];
+    private static readonly string[] Units = ["bytes", "KiB", "MiB", "GiB", "TiB"];
 
     public static string Format(long bytes, IFormatProvider? provider = null)
     {
@@ -27,7 +28,7 @@ public static class ByteSize
         }
 
         double rounded = Round(value);
-        // 1023.7 MB would print as "1024 MB"; show it as "1.0 GB" instead.
+        // 1023.7 MiB would print as "1024 MiB"; show it as "1.0 GiB" instead.
         if (Math.Abs(rounded) >= 1024 && unit < Units.Length - 1)
         {
             value /= 1024;
