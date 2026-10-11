@@ -87,3 +87,7 @@ Compactor only runs as admin from a folder that needs admin to change.
 `scripts/uninstall.sh` removes it.
 
 Errors are logged to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
+
+## License
+
+[MIT](LICENSE)
