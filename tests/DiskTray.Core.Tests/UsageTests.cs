@@ -107,6 +107,25 @@ public class UsageCacheTests
         Assert.NotNull(cache.Get(@"C:\a.vhdx"));
         Assert.Null(cache.Get(@"C:\b.vhdx"));
     }
+
+    [Fact]
+    public void Counts_the_month_from_when_a_file_was_last_seen_not_measured()
+    {
+        // Measured once, then detected but never running for 29 days, then hidden.
+        var cache = new UsageCache();
+        cache.Set(@"C:\a.vhdx", Reading);
+        cache.RetainOnly([@"C:\a.vhdx"], Reading.MeasuredAt.AddDays(29));
+
+        cache.RetainOnly([], Reading.MeasuredAt.AddDays(31));
+        Assert.NotNull(cache.Get(@"C:\a.vhdx"));
+
+        // Last seen survives a restart.
+        var loaded = UsageCache.FromJson(cache.ToJson());
+        loaded.RetainOnly([], Reading.MeasuredAt.AddDays(58));
+        Assert.NotNull(loaded.Get(@"C:\a.vhdx"));
+        loaded.RetainOnly([], Reading.MeasuredAt.AddDays(59));
+        Assert.Null(loaded.Get(@"C:\a.vhdx"));
+    }
 }
 
 public class UsageMeterTests
@@ -215,6 +234,20 @@ public class UsageMeterTests
 
         Assert.Empty(wsl.Calls);
         Assert.Equal(30L << 30, measured.PrimaryDistro!.UsedBytes);
+    }
+
+    [Fact]
+    public void Leaves_wsl_alone_when_asked_to()
+    {
+        var wsl = RunningWsl();
+        var cache = new UsageCache();
+        cache.Set(Machine.DockerData, new UsageReading(30_000_000_000, Machine.DockerSize, Now.AddHours(-1)));
+
+        var snapshot = new UsageMeter(wsl, cache, new FixedClock(Now)).Measure(Machine.Scan(), askWsl: false);
+
+        Assert.Empty(wsl.Calls);
+        Assert.Equal(30_000_000_000, snapshot.Docker?.UsedBytes);
+        Assert.Equal(Now.AddHours(-1), snapshot.Docker?.UsedAsOf);
     }
 
     [Fact]

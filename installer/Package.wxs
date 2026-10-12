@@ -40,17 +40,27 @@
       <ComponentGroupRef Id="AppFiles" />
     </Feature>
 
-    <!-- DiskTray running for other signed-in users, on an upgrade or uninstall: asked to
-         close, then ended if it hasn't. Runs as admin, so it reaches every session. The
-         installing user's own copy has been closed cleanly by then (CloseDiskTray). -->
+    <!-- DiskTray running for other signed-in users, on an upgrade or uninstall: sent a close
+         message, then ended if it hasn't gone after 15 s (Windows doesn't pass the message
+         to other sessions, so in practice it's ended). Runs as admin, so it reaches every
+         session. The installing user's own copy has been closed cleanly by then
+         (CloseDiskTray, or RemoveUserData on an uninstall). -->
     <util:CloseApplication Id="CloseOtherSessions" Target="DiskTray.exe" ElevatedCloseMessage="yes" ElevatedEndSessionMessage="yes"
                            TerminateProcess="1" Timeout="15" RebootPrompt="no" Condition="Installed OR WIX_UPGRADE_DETECTED" />
+
+    <!-- A Compactor running means a disk is being compacted. Ending it part way, or
+         replacing it, would leave that disk half done, so the install stops instead. -->
+    <util:CloseApplication Id="CompactorRunning" Target="DiskTray.Compactor.exe" Property="COMPACTORRUNNING" RebootPrompt="no" />
+    <CustomAction Id="StopWhileCompacting"
+                  Error="DiskTray is compacting a disk right now. Wait until it's done (the DiskTray flyout shows how it's going), then try again." />
 
     <!-- These run as the user doing the install, without admin rights, in their session. -->
 
     <!-- On an uninstall (not an upgrade): close DiskTray and remove the user's settings,
-         Startup apps entry and notification registration, which only DiskTray knows about. -->
-    <CustomAction Id="RemoveUserData" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
+         Startup apps entry and notification registration, which only DiskTray knows about.
+         Deferred, so it only runs once the uninstall is under way, after the admin prompt;
+         impersonated, so it runs as that user. -->
+    <CustomAction Id="RemoveUserData" Directory="INSTALLFOLDER" Execute="deferred" Impersonate="yes" Return="ignore"
                   ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --remove-user-data" />
     <!-- On an upgrade or a repair: close the running copy so its files can be replaced. -->
     <CustomAction Id="CloseDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
@@ -60,21 +70,29 @@
     <CustomAction Id="CloseAnyCopy" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
                   ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --exit" />
     <!-- Then start it the way Explorer does, so it never runs as admin even when the install
-         did. Skipped for silent installs, which have no one signed in to see it. -->
+         did. Not for a silent first install, nor for any install run as SYSTEM (by a
+         management tool), which have no one to see it; but after a silent upgrade a user
+         started (winget, say), since DiskTray was closed for it. -->
     <CustomAction Id="StartDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
                   ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
 
     <InstallExecuteSequence>
-      <Custom Action="RemoveUserData" Before="InstallValidate"
-              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
-      <Custom Action="CloseDiskTray" After="RemoveUserData"
+      <Custom Action="CloseDiskTray" Before="InstallValidate"
               Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot;" />
-      <!-- As early as admin actions can be queued: before the old version or any file is removed. -->
-      <Custom Action="override Wix4CloseApplications_X64" Before="RemoveExistingProducts" />
+      <!-- Between InstallInitialize and RemoveExistingProducts, as early as admin actions can
+           be queued, before the old version or any file is removed, in this order: the
+           user's own copy closes cleanly and their data goes (on an uninstall), then other
+           sessions' copies are closed and a running Compactor is looked for, which stops
+           the install. Each is placed before the next, since RemoveExistingProducts sits
+           straight after InstallInitialize. -->
+      <Custom Action="RemoveUserData" Before="Wix4CloseApplications_X64"
+              Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="override Wix4CloseApplications_X64" Before="StopWhileCompacting" />
+      <Custom Action="StopWhileCompacting" Before="RemoveExistingProducts" Condition="COMPACTORRUNNING" />
       <Custom Action="CloseAnyCopy" After="InstallFinalize"
               Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="StartDiskTray" After="CloseAnyCopy"
-              Condition="NOT REMOVE~=&quot;ALL&quot; AND UILevel &gt; 2" />
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND (UILevel &gt; 2 OR WIX_UPGRADE_DETECTED) AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

@@ -81,9 +81,41 @@ internal sealed class TrayController : IDisposable
         await RefreshAsync();
         _timer.Start();
         _reminderTimer.Start();
-        if (await InterruptedCleanup.FinishAsync(_docker, _wsl) is { } finished)
+        await FinishInterruptedCleanupAsync();
+    }
+
+    /// <summary>
+    /// Finishes a clean up the last run of DiskTray exited during, if there was one. Shown
+    /// like a running clean up meanwhile, so another can't start before its Compactor ends.
+    /// </summary>
+    private async Task FinishInterruptedCleanupAsync()
+    {
+        if (CleanupMarkerFile.Load() is not { } marker)
         {
-            Notifier.ShowCleanup("Clean up didn't finish", finished);
+            CleanupMarkerFile.Clear();
+            return;
+        }
+
+        _cleanupProgress = new CleanupProgress(CleanupStep.FinishingEarlierRun, "Finishing the clean up that was running when DiskTray closed");
+        UpdateCleanupStatus();
+        try
+        {
+            var finish = new InterruptedCleanup(_docker, _wsl, CleanupMarkerFile.CompactorRunning, delay => Task.Delay(delay), Log.Info);
+            string? finished = await finish.FinishAsync(marker);
+            CleanupMarkerFile.Clear();
+            if (finished is not null)
+            {
+                Notifier.ShowCleanup("Clean up didn't finish", finished);
+            }
+        }
+        catch (Exception e)
+        {
+            Log.Error("Couldn't finish the last clean up", e);
+        }
+        finally
+        {
+            _cleanupProgress = null;
+            UpdateCleanupStatus();
         }
     }
 
@@ -110,7 +142,8 @@ internal sealed class TrayController : IDisposable
                 {
                     var pins = _settings.Pins;
                     var detect = new DetectionOptions(_settings.DetectDistros, _settings.DetectDocker);
-                    _snapshot = await Task.Run(() => _monitor.Measure(pins, detect));
+                    bool askWsl = _cleanupProgress is not { KeepsWslQuiet: true };
+                    _snapshot = await Task.Run(() => _monitor.Measure(pins, detect, askWsl));
                     _problem = null;
                     Redraw();
                     CheckAlerts(UserIsActive());
@@ -317,7 +350,7 @@ internal sealed class TrayController : IDisposable
 
         var window = new CleanupWindow(snapshot, _settings.Cleanup, _dryRun);
         _cleanupWindow = window;
-        window.Started += request => _ = RunCleanupAsync(request);
+        window.Started += request => _ = RunCleanupAsync(request, window);
         window.Closed += (_, _) => _cleanupWindow = null;
         window.Show();
         window.Activate();
@@ -341,19 +374,19 @@ internal sealed class TrayController : IDisposable
         }
     }
 
-    private async Task RunCleanupAsync(CleanupRequest request)
+    /// <param name="window">The Clean up dialog, left open while the admin prompt is up.</param>
+    private async Task RunCleanupAsync(CleanupRequest request, CleanupWindow window)
     {
-        using var launcher = new CompactorLauncher();
+        using var launcher = new CompactorLauncher(window.Handle);
         _cleanupCancel = new CancellationTokenSource();
         bool toldCompacting = false;
         var dispatcher = Dispatcher.CurrentDispatcher;
         var progress = new RunProgress<CleanupProgress>(action => dispatcher.BeginInvoke(action), p =>
         {
             _cleanupProgress = p;
-            if (p.Step is CleanupStep.StoppingDocker or CleanupStep.ShuttingDownWsl && !request.DryRun)
+            if (p.Step != CleanupStep.AskingForAdmin)
             {
-                // From here on, exiting would leave Docker stopped; the next start finishes up.
-                InterruptedCleanup.Save(request.StartDockerAfter);
+                window.CloseIfOpen();
             }
 
             if (p.Step == CleanupStep.Compacting && !toldCompacting)
@@ -371,7 +404,9 @@ internal sealed class TrayController : IDisposable
             $"{request.Volumes.Count} volumes, compact {request.Disks.Count} disks {request.When}, start Docker after {request.StartDockerAfter}");
         try
         {
-            var run = new CleanupRun(_docker, _wsl, launcher, (delay, cancel) => Task.Delay(delay, cancel), Log.Info);
+            // From stopping Docker on, exiting would leave it stopped, so the next start finishes up.
+            var run = new CleanupRun(_docker, _wsl, launcher, (delay, cancel) => Task.Delay(delay, cancel), Log.Info, point =>
+                CleanupMarkerFile.Save(new CleanupMarker(request.StartDockerAfter, DateTimeOffset.Now, point == CleanupMilestone.Compacting)));
             var result = await run.RunAsync(request, progress, _cleanupCancel.Token);
             Log.Info($"{result.Title}: {result.Body().Replace('\n', ' ')}");
             Notifier.ShowCleanup(result.Title, result.Body());
@@ -384,7 +419,8 @@ internal sealed class TrayController : IDisposable
         finally
         {
             progress.Done();
-            InterruptedCleanup.Clear();
+            window.CloseIfOpen();
+            CleanupMarkerFile.Clear();
             _cleanupProgress = null;
             _cleanupCancel.Dispose();
             _cleanupCancel = null;
@@ -537,12 +573,12 @@ internal sealed class TrayController : IDisposable
     }
 
     /// <summary>
-    /// Exiting while a clean up waits for WSL to go idle just cancels it, but once it has
-    /// stopped Docker or started compacting, it's worth a question.
+    /// Exiting while a clean up waits for admin or for WSL to go idle just cancels it, but
+    /// while it prunes, stops Docker or compacts, it's worth a question (<see cref="CleanupProgress.ExitQuestion"/>).
     /// </summary>
     private async Task<bool> ConfirmExitAsync()
     {
-        if (_cleanupProgress is null or { CanCancel: true })
+        if (_cleanupProgress?.ExitQuestion is not { } question)
         {
             return true;
         }
@@ -550,8 +586,7 @@ internal sealed class TrayController : IDisposable
         var ask = new Wpf.Ui.Controls.MessageBox
         {
             Title = "Exit DiskTray?",
-            Content = "A clean up is running. Compacting carries on without DiskTray, but you won't hear how it went. "
-                + "Next time DiskTray starts, it starts Docker Desktop again if the clean up was going to.",
+            Content = question,
             PrimaryButtonText = "Exit",
             CloseButtonText = "Keep running",
         };

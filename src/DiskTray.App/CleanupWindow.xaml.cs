@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using DiskTray.Core;
 using DiskTray.Core.Cleanup;
@@ -53,8 +54,32 @@ internal partial class CleanupWindow : FluentWindow
         Update();
     }
 
-    /// <summary>Raised when Clean up is clicked, with what to do. The window closes after.</summary>
+    /// <summary>
+    /// Raised when Clean up is clicked, with what to do. The window closes after, or, when
+    /// there's something to compact, stays (disabled) until the owner closes it once the
+    /// admin prompt is answered.
+    /// </summary>
     public event Action<CleanupRequest>? Started;
+
+    /// <summary>The window's handle, for the admin prompt to belong to.</summary>
+    public nint Handle => new WindowInteropHelper(this).Handle;
+
+    private bool _closed;
+
+    /// <summary>Closes the window unless it's closed already.</summary>
+    public void CloseIfOpen()
+    {
+        if (!_closed)
+        {
+            Close();
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        base.OnClosed(e);
+    }
 
     /// <summary>Fills in what Docker can prune, once it's been asked.</summary>
     public void ShowScan(CleanupState state)
@@ -230,7 +255,19 @@ internal partial class CleanupWindow : FluentWindow
             return;
         }
 
-        Started?.Invoke(CleanupRequest.From(_state, choices, model, _dryRun));
-        Close();
+        var request = CleanupRequest.From(_state, choices, model, _dryRun);
+        if (request.Disks.Count == 0)
+        {
+            Started?.Invoke(request);
+            Close();
+            return;
+        }
+
+        // Open until the admin prompt is answered, so the prompt comes up over it, in front.
+        Body.IsEnabled = false;
+        Start.IsEnabled = false;
+        CancelButton.IsEnabled = false;
+        Plan.Text = "Waiting for admin permission…";
+        Started?.Invoke(request);
     }
 }

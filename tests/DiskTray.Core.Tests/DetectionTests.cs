@@ -90,6 +90,18 @@ public class DockerDesktopTests
     }
 
     [Fact]
+    public void Reads_a_custom_folder_written_with_forward_slashes()
+    {
+        var probe = new FakeDiskProbe();
+        probe.Texts[AppData + @"\Docker\settings-store.json"] = """{ "CustomWslDistroDir": "D:/docker/wsl" }""";
+
+        string path = DockerDesktop.DataDiskPath(probe, LocalAppData, AppData);
+
+        Assert.Equal(@"D:\docker\wsl\disk\docker_data.vhdx", path);
+        Assert.True(DiskTray.Core.Compact.CompactorArgs.IsVhdx(path));
+    }
+
+    [Fact]
     public void Falls_back_to_the_legacy_settings_file()
     {
         var probe = new FakeDiskProbe();

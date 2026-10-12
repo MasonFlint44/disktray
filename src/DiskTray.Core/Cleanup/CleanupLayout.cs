@@ -142,7 +142,8 @@ public static class CleanupLayout
         long pruneBytes = buildCache + dangling + volumeBytes;
         bool pruneHasWork = prune && (choices.BuildCache || choices.DanglingImages || volumes.Count > 0);
 
-        var targets = choices.Compact ? Targets(state.Snapshot, pruneBytes) : [];
+        var compactable = Targets(state.Snapshot, pruneBytes);
+        var targets = choices.Compact ? compactable : [];
         long gain = targets.Sum(t => t.GainBytes ?? 0);
         bool idle = choices.When == CompactWhen.WhenIdle;
 
@@ -173,7 +174,7 @@ public static class CleanupLayout
             docker is null ? "" : Size(docker.BuildCacheBytes),
             docker is null ? "" : docker.DanglingImages == 0 ? "none" : Size(docker.DanglingImageBytes),
             state.VolumeGroups.Select(g => GroupLine(g, provider)).ToList(),
-            CompactDetail(state.Snapshot, pruneBytes, provider),
+            CompactDetail(compactable, provider),
             choices.Compact && gain > 0 ? Size(gain) : "",
             choices.Compact && !idle ? Warning(state) : [],
             summary,
@@ -183,8 +184,9 @@ public static class CleanupLayout
     }
 
     /// <summary>
-    /// The disks to compact: Docker's data disk and the main distro's. Afterwards each is about
-    /// as big as what's in use, less what the prune removes from Docker's.
+    /// The disks to compact (<see cref="TrayLayout.CompactableFiles"/>), largest first.
+    /// Afterwards each is about as big as what's in use, less what the prune removes from
+    /// Docker's.
     /// </summary>
     public static IReadOnlyList<CompactTarget> Targets(DiskSnapshot snapshot, long pruneBytes) =>
         TrayLayout.CompactableFiles(snapshot)
@@ -206,6 +208,10 @@ public static class CleanupLayout
             FolderCheck.Deleted => $"{group.Project} · folder deleted ({group.Folder!.Display})",
             FolderCheck.Exists when group.Guessed => $"{group.Project} · folder exists ({group.Folder!.Display}, matched by name)",
             FolderCheck.Exists => $"{group.Project} · folder exists ({group.Folder!.Display})",
+            FolderCheck.NotChecked when group is { FolderGone: true, Folder: { DistroGuessed: true, Distro: { } distro } folder } =>
+                $"{group.Project} · not at {folder.Display} in {distro}, but it may be in another distro",
+            FolderCheck.NotChecked when group is { FolderGone: true, Folder: { } folder } =>
+                $"{group.Project} · {folder.Display} is gone, but the project may be somewhere else",
             FolderCheck.NotChecked when group.Folder is { Distro: { } distro } folder => $"{group.Project} · {folder.Display} not checked, {distro} isn't running",
             FolderCheck.NotChecked => $"{group.Project} · folder not checked, its distro isn't running",
             FolderCheck.NoMatch => $"{group.Project} · no matching folder in {where}",
@@ -261,9 +267,8 @@ public static class CleanupLayout
     }
 
     /// <summary>"Docker 129 → ~16 GiB · Ubuntu 60 → ~35 GiB".</summary>
-    private static string CompactDetail(DiskSnapshot snapshot, long pruneBytes, IFormatProvider provider)
+    private static string CompactDetail(IReadOnlyList<CompactTarget> targets, IFormatProvider provider)
     {
-        var targets = Targets(snapshot, pruneBytes);
         if (targets.Count == 0)
         {
             return "No WSL or Docker disks found";

@@ -12,7 +12,8 @@ public interface ICompactorHost
     bool InUse(string path);
 
     /// <summary>
-    /// Compacts the detached disk with Windows' virtual disk API, reporting the percentage done.
+    /// Compacts the detached disk with Windows' virtual disk API, reporting the percentage done
+    /// every second or so, changed or not, so the app can tell a slow compact from a stuck one.
     /// Returns why it failed, or null when it worked.
     /// </summary>
     string? CompactDisk(string path, Action<int> progress);
@@ -35,6 +36,12 @@ public interface ICompactorHost
 public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
 {
     public static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// The longest the Compactor goes without sending a status once it's been told to go.
+    /// Every step reports at least once a second; this leaves room for a slow machine.
+    /// </summary>
+    public static readonly TimeSpan QuietLimit = TimeSpan.FromMinutes(2);
 
     /// <summary>How long a disk can stay in use after WSL shuts down before giving up on it.</summary>
     public static readonly TimeSpan InUseTimeout = TimeSpan.FromSeconds(60);
@@ -107,6 +114,8 @@ public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
 
             host.Wait(PollInterval);
             waited += PollInterval;
+            // Still here: without a status now and then, the app would take the wait for a hang.
+            Progress(0);
         }
 
         host.Log($"Compacting {disk} ({before} bytes).");

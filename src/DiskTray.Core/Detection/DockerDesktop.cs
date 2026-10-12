@@ -48,8 +48,10 @@ public static class DockerDesktop
             {
                 if (property.NameEquals("CustomWslDistroDir") || property.NameEquals("customWslDistroDir"))
                 {
+                    // Written by hand, it may use forward slashes, which Windows takes but the
+                    // Compactor's strict path check doesn't.
                     return property.Value.ValueKind == JsonValueKind.String && property.Value.GetString() is { Length: > 0 } dir
-                        ? dir
+                        ? dir.Replace('/', '\\')
                         : null;
                 }
             }

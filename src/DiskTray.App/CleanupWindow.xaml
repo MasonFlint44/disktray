@@ -57,7 +57,7 @@
     <ui:TitleBar x:Name="TitleBar" Title="Clean up" ShowMaximize="False" ShowMinimize="False"
                  Icon="{ui:ImageIcon 'pack://application:,,,/app.ico', Width=16, Height=16}" />
 
-    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+    <ScrollViewer x:Name="Body" Grid.Row="1" VerticalScrollBarVisibility="Auto">
       <StackPanel Margin="24,8,24,12">
         <ui:InfoBar x:Name="DryRunBar" Margin="0,0,0,12" IsOpen="True" IsClosable="False" Severity="Informational"
                     Title="Dry run" Visibility="Collapsed"
@@ -166,7 +166,7 @@
           <TextBlock x:Name="Plan" Style="{StaticResource Secondary}" Margin="0,2,0,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal">
-          <ui:Button Content="Cancel" Width="96" Height="36" Margin="0,0,8,0" IsCancel="True" Click="OnCancelClick" />
+          <ui:Button x:Name="CancelButton" Content="Cancel" Width="96" Height="36" Margin="0,0,8,0" IsCancel="True" Click="OnCancelClick" />
           <ui:Button x:Name="Start" Content="Clean up" Width="120" Height="36" Appearance="Primary" Click="OnStartClick" />
         </StackPanel>
       </Grid>

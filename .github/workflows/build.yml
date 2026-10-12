@@ -21,6 +21,20 @@ jobs:
           global-json-file: global.json
       - run: dotnet test
 
+  windows-tests:
+    # The Windows-only parts that matter for running as admin: the pipe between the app and
+    # the Compactor, its path and account checks, and a real compact of a small VHDX. The
+    # runner has admin rights, which some of these need; they fail rather than skip here.
+    runs-on: windows-latest
+    env:
+      DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+      - run: dotnet test
+
   installer:
     runs-on: windows-latest
     steps:
@@ -60,7 +74,7 @@ jobs:
   release:
     # A v1.2.3 tag publishes a GitHub release with the MSI attached.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [test, installer]
+    needs: [test, windows-tests, installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write

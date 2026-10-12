@@ -1,11 +1,12 @@
 using System.IO;
 using DiskTray.Core.Cleanup;
+using DiskTray.Core.Compact;
 using DiskTray.Core.Usage;
 
 namespace DiskTray.App;
 
 /// <summary>Runs <c>wsl.exe</c> hidden, with a timeout.</summary>
-internal sealed class WslExe : IWslCommands, IWslControl
+internal sealed class WslExe : IWslControl
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromMinutes(1);
@@ -45,28 +46,14 @@ internal sealed class WslExe : IWslCommands, IWslControl
     /// </summary>
     public bool? DiskInUse(string path)
     {
-        try
+        bool? inUse = DiskOpenCheck.InUse(path, out string? problem);
+        if (inUse is null)
         {
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None);
-            return false;
+            Log.Info($"Couldn't tell whether {path} is in use: {problem}");
         }
-        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException)
-        {
-            return false;
-        }
-        catch (IOException e) when ((e.HResult & 0xFFFF) is ErrorSharingViolation or ErrorLockViolation)
-        {
-            return true;
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            Log.Info($"Couldn't tell whether {path} is in use: {e.Message}");
-            return null;
-        }
-    }
 
-    private const int ErrorSharingViolation = 32;
-    private const int ErrorLockViolation = 33;
+        return inUse;
+    }
 
     public string? Run(string distro, IReadOnlyList<string> command) =>
         Run(["--distribution", distro, "--exec", .. command]);

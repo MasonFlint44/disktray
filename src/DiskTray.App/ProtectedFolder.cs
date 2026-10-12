@@ -38,17 +38,23 @@ internal static partial class ProtectedFolder
     /// </summary>
     public static string? Problem(string exe)
     {
-        switch (Elevation())
+        if (IsElevated())
         {
-            case TokenElevationType.Full:
-                // DiskTray itself running as admin would start the Compactor with no prompt,
-                // and the checks below can't tell what a normal process could change.
-                return "DiskTray is running as admin. Start it normally, and it asks for admin when it compacts";
-            case TokenElevationType.Default when IsAdmin():
-                // UAC is off, so everything runs as admin: there's no line for a swapped exe to cross.
-                return null;
+            // DiskTray itself running as admin (started that way, or by the built-in
+            // Administrator account, which UAC doesn't split) would start the Compactor with
+            // no prompt, and the checks below can't tell what a normal process could change.
+            // With UAC off everything runs as admin: there's no line for a swapped exe to cross.
+            return UacOn()
+                ? "DiskTray is running as admin. Start it normally, from an account other than the built-in Administrator, and it asks for admin when it compacts"
+                : null;
         }
 
+        return FolderProblem(exe);
+    }
+
+    /// <summary>The checks on the files and folders, whoever is running: null when none of them can be changed.</summary>
+    internal static string? FolderProblem(string exe)
+    {
         string folder = Path.GetDirectoryName(Path.GetFullPath(exe))!;
         var checks = new List<(string Path, uint[] Rights, bool IsFolder)> { (exe, FileRights, false), (folder, FolderRights, true) };
         try
@@ -120,28 +126,29 @@ internal static partial class ProtectedFolder
         return Access.Denied;
     }
 
-    private enum TokenElevationType
-    {
-        Default = 1,
-        Full = 2,
-        Limited = 3,
-    }
+    private const int TokenElevationClass = 20;
 
-    private const int TokenElevationTypeClass = 18;
-
-    /// <summary>Full for an elevated admin, Limited for an admin's normal token, Default with UAC off or for a standard user.</summary>
-    private static TokenElevationType Elevation()
+    /// <summary>
+    /// Whether this process has admin rights in effect: started as administrator, run by the
+    /// built-in Administrator account, or by any admin with UAC off. Unknown counts as yes.
+    /// </summary>
+    private static bool IsElevated()
     {
         using var identity = WindowsIdentity.GetCurrent();
-        return GetTokenInformation(identity.AccessToken, TokenElevationTypeClass, out int type, sizeof(int), out _)
-            ? (TokenElevationType)type
-            : TokenElevationType.Default;
+        return !GetTokenInformation(identity.AccessToken, TokenElevationClass, out int elevated, sizeof(int), out _) || elevated != 0;
     }
 
-    private static bool IsAdmin()
+    /// <summary>Whether UAC is on (EnableLUA). Unknown counts as on, which only means not compacting.</summary>
+    private static bool UacOn()
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        try
+        {
+            return Microsoft.Win32.Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "EnableLUA", 1) is not 0;
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 
     [LibraryImport("advapi32.dll", SetLastError = true)]

@@ -121,8 +121,15 @@ public static class FlyoutLayout
             banners.Add(low);
         }
 
-        var reclaimable = items.Where(i => i.File!.ReclaimableBytes > 0).ToList();
-        long reclaimableTotal = reclaimable.Sum(i => i.File!.ReclaimableBytes ?? 0);
+        // Every disk on the drive that Clean up compacts, pinned or not, as notifications count it.
+        var reclaimable = TrayLayout.CompactableFiles(snapshot)
+            .Where(f => f.ReclaimableBytes > 0 && string.Equals(f.DriveRoot, drive.Root, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(f => f.SizeBytes)
+            .Select(f => (Name: items.FirstOrDefault(i => string.Equals(i.File!.Path, f.Path, StringComparison.OrdinalIgnoreCase)) is { } pinned
+                ? TrayLayout.ShortName(pinned)
+                : TrayLayout.ShortName(f), Bytes: f.ReclaimableBytes ?? 0))
+            .ToList();
+        long reclaimableTotal = reclaimable.Sum(r => r.Bytes);
 
         return new FlyoutModel(
             $"Drive {drive.Label} · {Size(drive.TotalBytes)}",
@@ -134,7 +141,7 @@ public static class FlyoutLayout
             files.Any(f => f.ReclaimableBytes > 0),
             reclaimableTotal > 0 ? Size(reclaimableTotal) : null,
             reclaimableTotal > 0
-                ? string.Join(" · ", reclaimable.Select(i => $"{TrayLayout.ShortName(i)} {Size(i.File!.ReclaimableBytes ?? 0)}"))
+                ? string.Join(" · ", reclaimable.Select(r => $"{r.Name} {Size(r.Bytes)}"))
                 : null,
             Footer(snapshot.TakenAt, now, refreshInterval, zone, provider))
         {

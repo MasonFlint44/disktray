@@ -10,7 +10,8 @@ public enum FolderCheck
 
     /// <summary>
     /// Checking the folder, or searching for one, would mean starting a distro; or the folder
-    /// isn't where it was assumed to be, in a distro that wasn't recorded.
+    /// is gone but the project may live on elsewhere: in another distro than the one assumed,
+    /// or at another folder known for it that couldn't be checked.
     /// </summary>
     NotChecked,
 
@@ -37,6 +38,9 @@ public sealed record VolumeGroup(
 {
     public bool PreSelected => Check == FolderCheck.Deleted;
 
+    /// <summary>The folder was checked and isn't there, though that alone didn't make it <see cref="FolderCheck.Deleted"/>.</summary>
+    public bool FolderGone { get; init; }
+
     public long SizeBytes => Volumes.Sum(v => v.SizeBytes);
 }
 
@@ -54,7 +58,8 @@ public interface IFolderLookup
 /// Groups unused volumes by Compose project and works out how sure it is that each
 /// project's folder is gone. In order, a project's folder comes from a container's labels,
 /// then from <see cref="ProjectFolderCache"/>, then from a name match in the code folders.
-/// Only a known folder that's missing counts as deleted.
+/// Only a known folder that's missing counts as deleted, and only when no other sign of the
+/// project turns up.
 /// </summary>
 public static class VolumeConfidence
 {
@@ -84,16 +89,11 @@ public static class VolumeConfidence
                 continue;
             }
 
-            if (FolderOf(project, fromContainers, cache) is { } folder)
+            var live = fromContainers.GetValueOrDefault(project);
+            var remembered = cache.Get(project);
+            if (FolderOf(live, remembered) is { } folder)
             {
-                var check = lookup.Exists(folder) switch
-                {
-                    true => FolderCheck.Exists,
-                    // Only a folder whose distro is known for sure can be called gone.
-                    false when !folder.DistroGuessed => FolderCheck.Deleted,
-                    _ => FolderCheck.NotChecked,
-                };
-                groups.Add(new VolumeGroup(project, check, folder, false, volumes, []));
+                groups.Add(KnownFolder(project, folder, [live, remembered], volumes, listings, searched, lookup));
             }
             else if (MatchByName(project, listings) is { } match)
             {
@@ -119,13 +119,53 @@ public static class VolumeConfidence
     /// A recorded folder beats one whose distro was guessed, whether it's from a container
     /// now or remembered; then a container's beats the remembered one.
     /// </summary>
-    private static ProjectFolder? FolderOf(string project, IReadOnlyDictionary<string, ProjectFolder> fromContainers, ProjectFolderCache cache)
-    {
-        var live = fromContainers.GetValueOrDefault(project);
-        var remembered = cache.Get(project);
-        return live is { DistroGuessed: false } ? live
+    private static ProjectFolder? FolderOf(ProjectFolder? live, ProjectFolder? remembered) =>
+        live is { DistroGuessed: false } ? live
             : remembered is { DistroGuessed: false } ? remembered
             : live ?? remembered;
+
+    /// <summary>
+    /// The group for a project whose folder is known. That folder being gone only makes it
+    /// deleted when nothing says the project lives on elsewhere: not the other folder known
+    /// for it (from a container now, or remembered), and not a folder by its name in the code
+    /// folders (cloned again somewhere new, say).
+    /// </summary>
+    private static VolumeGroup KnownFolder(
+        string project,
+        ProjectFolder folder,
+        IEnumerable<ProjectFolder?> known,
+        IReadOnlyList<DockerVolume> volumes,
+        IReadOnlyList<(ProjectFolder Folder, IReadOnlyList<string>? Names)> listings,
+        IReadOnlyList<ProjectFolder> searched,
+        IFolderLookup lookup)
+    {
+        bool? there = lookup.Exists(folder);
+        if (there == true)
+        {
+            return new VolumeGroup(project, FolderCheck.Exists, folder, false, volumes, []);
+        }
+
+        // Only a folder whose distro is known for sure can be called gone.
+        bool unsure = there is null || folder.DistroGuessed;
+        foreach (var other in known.OfType<ProjectFolder>().Where(f => f != folder).Distinct())
+        {
+            switch (lookup.Exists(other))
+            {
+                case true:
+                    return new VolumeGroup(project, FolderCheck.Exists, other, false, volumes, []);
+                case null:
+                case false when other.DistroGuessed:
+                    unsure = true;
+                    break;
+            }
+        }
+
+        if (MatchByName(project, listings) is { } match)
+        {
+            return new VolumeGroup(project, FolderCheck.Exists, match, true, volumes, searched);
+        }
+
+        return new VolumeGroup(project, unsure ? FolderCheck.NotChecked : FolderCheck.Deleted, folder, false, volumes, []) { FolderGone = there == false };
     }
 
     /// <summary>

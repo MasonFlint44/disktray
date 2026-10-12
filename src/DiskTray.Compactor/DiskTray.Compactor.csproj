@@ -19,4 +19,8 @@
   <ItemGroup>
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The pipe, path and account checks and the compact are tested on Windows. -->
+    <InternalsVisibleTo Include="DiskTray.Windows.Tests" />
+  </ItemGroup>
 </Project>

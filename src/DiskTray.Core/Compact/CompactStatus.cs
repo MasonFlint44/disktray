@@ -116,4 +116,10 @@ public static class CompactorMessages
         Cancel => AppSignal.Cancel,
         _ => AppSignal.None,
     };
+
+    /// <summary>
+    /// The first thing the app says is what counts: "go" followed straight away by the app
+    /// going (it exited once WSL was down) is still "go".
+    /// </summary>
+    public static AppSignal Latch(AppSignal current, AppSignal next) => current == AppSignal.None ? next : current;
 }

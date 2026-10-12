@@ -7,11 +7,15 @@ namespace DiskTray.Core.Usage;
 /// </summary>
 public sealed class UsageMeter(IWslCommands wsl, UsageCache cache, TimeProvider clock)
 {
-    public DiskSnapshot Measure(DiskSnapshot snapshot)
+    /// <param name="askWsl">
+    /// False to use only the last readings, without running anything in WSL: while a clean
+    /// up waits for WSL to stop, a <c>df</c> could start a distro that has just stopped.
+    /// </param>
+    public DiskSnapshot Measure(DiskSnapshot snapshot, bool askWsl = true)
     {
         // Not knowing what's running is the same as nothing running here: it only means
         // falling back to the last reading.
-        var running = wsl.RunningDistros() ?? new HashSet<string>();
+        var running = (askWsl ? wsl.RunningDistros() : null) ?? new HashSet<string>();
         var files = snapshot.Files.Select(f => Measure(f, running)).ToList();
         cache.RetainOnly(files.Select(f => f.Path), clock.GetUtcNow());
         return snapshot with { Files = files };

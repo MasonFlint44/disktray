@@ -47,6 +47,9 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
             return [];
         }
 
-        return docker.Run(DockerOutput.InspectCommand(ids), QuickTimeout) is { } inspect ? DockerOutput.ParseContainers(inspect) : [];
+        // A container whose batch fails is left out, as if it weren't there.
+        return DockerOutput.InspectCommands(ids)
+            .SelectMany(command => docker.Run(command, QuickTimeout) is { } inspect ? DockerOutput.ParseContainers(inspect) : [])
+            .ToList();
     }
 }

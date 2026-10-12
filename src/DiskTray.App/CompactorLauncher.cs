@@ -13,7 +13,8 @@ namespace DiskTray.App;
 /// Starts DiskTray.Compactor.exe (next to DiskTray.exe) with admin rights and talks to it over
 /// a fresh named pipe: it sends status and log lines, this sends "go" or "cancel".
 /// </summary>
-internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
+/// <param name="owner">The window the admin prompt belongs to, so it comes up in front of it.</param>
+internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, IDisposable
 {
     private const int Cancelled = 1223;
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
@@ -25,6 +26,7 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
     private CompactStatus? _status;
     private volatile bool _hungUp;
     private volatile bool _connected;
+    private volatile bool _listening;
 
     public static string ExePath { get; } = Path.Combine(AppContext.BaseDirectory, "DiskTray.Compactor.exe");
 
@@ -32,7 +34,7 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
     /// Once it has connected, only the pipe closing counts, so a status it sent just before
     /// exiting has been read by then. Before that, the process ending does.
     /// </summary>
-    public bool HasExited => _hungUp || _process is null || (!_connected && HasProcessExited(_process));
+    public bool HasExited => _hungUp || !_listening || (_process is not null && !_connected && HasProcessExited(_process));
 
     public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
@@ -57,17 +59,16 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         }
 
         var args = new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun);
-
-        // Created before the Compactor starts, and only once, so nothing else can be on this
-        // name; and only this user and admins (the Compactor may run as a separate admin
-        // account) can connect, never over the network.
-        _pipe = NamedPipeServerStreamAcl.Create(
-            args.Pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, 0, 0, PipeAccess());
+        OpenPipe(args.Pipe);
         var start = new ProcessStartInfo(ExePath)
         {
             UseShellExecute = true,
             Verb = "runas",
             WindowStyle = ProcessWindowStyle.Hidden,
+            // The only way to hand the prompt an owner window; Windows shows its own message
+            // if starting fails for some other reason than the prompt being turned down.
+            ErrorDialog = owner != 0,
+            ErrorDialogParentHandle = owner,
             // Disk paths were checked when parsed, and can't hold quotes.
             Arguments = string.Join(' ', args.ToArgs().Select(a => a.Contains(' ') || a.Length == 0 ? $"\"{a}\"" : a)),
             WorkingDirectory = Environment.SystemDirectory,
@@ -97,8 +98,28 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         }
 
         Log.Info($"Started the Compactor ({_process.Id}){(dryRun ? " for a dry run" : "")}: {string.Join(", ", disks)}");
-        _ = Task.Run(() => ListenAsync(_pipe, _process));
+        Listen(_process.Id);
         return null;
+    }
+
+    /// <summary>
+    /// Creates the pipe. Before the Compactor starts, and only once, so nothing else can be on
+    /// this name; and only this user and admins (the Compactor may run as a separate admin
+    /// account) can connect, never over the network.
+    /// </summary>
+    internal void OpenPipe(string name) =>
+        _pipe = NamedPipeServerStreamAcl.Create(
+            name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, 0, 0, PipeAccess());
+
+    /// <summary>Who may connect to the pipe, as Windows has it.</summary>
+    internal PipeSecurity? PipeSecurity() => _pipe?.GetAccessControl();
+
+    /// <summary>Waits for the process <paramref name="clientId"/> to connect to the pipe, then reads what it sends.</summary>
+    internal void Listen(int clientId)
+    {
+        var pipe = _pipe ?? throw new InvalidOperationException("The pipe isn't open.");
+        _listening = true;
+        _ = Task.Run(() => ListenAsync(pipe, clientId));
     }
 
     public CompactStatus? ReadStatus()
@@ -115,7 +136,13 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         {
             try
             {
-                _writer?.WriteLine(message);
+                if (_writer is null)
+                {
+                    Log.Info($"Couldn't tell the Compactor {message}: it isn't connected");
+                    return;
+                }
+
+                _writer.WriteLine(message);
                 Log.Info($"Told the Compactor: {message}");
             }
             catch (Exception e) when (e is IOException or ObjectDisposedException)
@@ -127,7 +154,7 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
 
     public void Dispose() => Close();
 
-    private async Task ListenAsync(NamedPipeServerStream pipe, Process process)
+    private async Task ListenAsync(NamedPipeServerStream pipe, int clientId)
     {
         try
         {
@@ -135,7 +162,7 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
             await pipe.WaitForConnectionAsync(timeout.Token);
 
             // Only the process just started may be on the other end.
-            if (!NativeMethods.GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint client) || client != process.Id)
+            if (!NativeMethods.GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint client) || client != clientId)
             {
                 Log.Info($"Something other than the Compactor ({client}) connected to its pipe; hanging up");
                 _hungUp = true;
@@ -191,7 +218,12 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         using var me = WindowsIdentity.GetCurrent();
         var security = new PipeSecurity();
         security.AddAccessRule(new PipeAccessRule(me.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
-        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        // ReadWrite alone lacks what a client opening for writing asks for (FILE_APPEND_DATA,
+        // which is CreateNewInstance on a pipe). The pipe allows one instance, which is this one.
+        security.AddAccessRule(new PipeAccessRule(
+            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
+            AccessControlType.Allow));
         security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
         return security;
     }

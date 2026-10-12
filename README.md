@@ -49,8 +49,10 @@ Each release has a `SHA256SUMS.txt` to check the download against
 (`Get-FileHash DiskTray-<version>-x64.msi`).
 
 Uninstall it from **Settings › Apps**. That also removes your DiskTray settings, logs and
-caches (`%LOCALAPPDATA%\DiskTray`) and its Startup apps entry. Docker and WSL aren't
-touched.
+caches (`%LOCALAPPDATA%\DiskTray`) and its Startup apps entry, once you've said yes to
+the admin prompt. Docker and WSL aren't touched. DiskTray can't be upgraded or
+uninstalled while it's compacting a disk; the installer says so, and you can try again
+once it's done.
 
 Clean up needs Docker Desktop 4.39 or later, using the WSL 2 backend, to prune and to
 stop and start Docker around a compact.
@@ -67,6 +69,7 @@ drag them onto the taskbar.
 | `src/DiskTray.App` | WPF tray app (`net10.0-windows`) |
 | `src/DiskTray.Compactor` | Elevated helper that compacts VHDX files |
 | `tests/DiskTray.Core.Tests` | Unit tests for Core (run anywhere, including WSL) |
+| `tests/DiskTray.Windows.Tests` | Tests of the parts that run as admin, on real files and pipes (Windows only) |
 | `installer` | WiX project for the MSI |
 | `scripts/deploy.sh` | Publishes a development copy from WSL to Windows and restarts it |
 | `scripts/build-msi.sh` | Builds the MSI from WSL |
@@ -80,6 +83,9 @@ development copy needs the .NET 10 Desktop Runtime; the installer brings its own
 dotnet build DiskTray.slnx
 dotnet test
 ```
+
+`dotnet test` runs the Windows tests too when run on Windows. A few of them need admin
+rights and are skipped without them; the GitHub Actions build runs them all.
 
 ## Building the installer
 

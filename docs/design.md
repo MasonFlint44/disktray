@@ -30,13 +30,14 @@ difference is *reclaimable* and is shown as a lighter tint of the item's color.
 - **Missing items** (Docker not installed, a deleted file, a drive that isn't there)
   keep their icon as a plain circle whose tooltip says what's missing.
 - **What gets compacted**, whatever is pinned: Docker's data disk, the primary distro's,
-  and any other distro once it's been measured holding space it doesn't use (when the
-  flyout shows it as reclaimable). The "reclaimable" line in notifications counts the
-  same disks. Docker Desktop's own small distros are left out.
+  and any other distro once it's been measured holding space it doesn't use. The
+  flyout's "Reclaimable by compacting" total and the "reclaimable" line in notifications
+  count the same disks, pinned or not. Docker Desktop's own small distros are left out.
 - **Pinned paths** must be on one of the PC's own drive letters. A path in
   `\\wsl.localhost` would start WSL on every refresh (and keep it from going idle for a
   compact), and a network share could hold up every refresh, so neither can be picked,
-  and settings holding one drop it.
+  and settings holding a `\\` path drop it. A mapped network drive letter looks like a
+  local path in settings, so only the pickers refuse it.
 - **Two pins for the same item** (the default distro pinned both as "the default" and by
   name) get one icon.
 - **Warning indicator.** An amber ring or outline when free space is below the
@@ -116,7 +117,9 @@ is its Windows & other slice.
     since then counts as used, so the reclaimable number is never overstated.
   - There's no way to run a command only if the distro is already up. If a distro stops
     in the moment between the list and the `df`, WSL starts it again, and it shuts down
-    on its own once idle.
+    on its own once idle. While a clean up waits for WSL to go idle, stops it or
+    compacts, refreshes don't run `df` at all and show the last readings, so they can't
+    start a distro that was just stopped.
 - **Add… › File… / Folder…** in Settings › Tray icons pins any file or folder by hand.
 
 ## Flyout (left-click a tray icon)
@@ -129,7 +132,7 @@ is its Windows & other slice.
 - "Lighter shade = space a disk file is holding but not using."
 - "Other large files" (over 2 GiB, not pinned), each with its folder, size and a pin
   button, and when the scan ran. Can be turned off.
-- "Reclaimable by compacting" total.
+- "Reclaimable by compacting" total: every disk Clean up compacts, pinned or not.
 - Footer: "Updated 1:41 PM · checks every 5 min", and the **Clean up…** button.
 - While a clean up runs, a line under the banners says where it is ("Compacts once you
   quit Docker Desktop and close Ubuntu", "Compacting Docker data (1 of 2) · 40%"), with
@@ -186,12 +189,14 @@ user clicks **Clean up**.
        Anything it can't find out counts as still running: a `wsl.exe` that times out
        or fails with a WSL error code, a `docker desktop status` it can't read (then
        Docker's own distros running means Docker is), or a disk it can't check. So a
-       hung WSL is never taken for an idle one. Nothing gets interrupted.
+       hung WSL is never taken for an idle one. Once everything looks idle, WSL is asked
+       once more just before it's shut down, since a check takes a while, and Cancel
+       clicked during a check still cancels. Nothing gets interrupted.
      - Right away: shows an amber warning listing what gets closed (each running distro's
        terminals, VS Code and Claude Code sessions, and Docker Desktop's running
        containers), or saying it couldn't tell what's running. Docker Desktop has to be
-       stopped first: if DiskTray can't tell whether it's running, or `docker desktop
-       stop` fails, nothing gets shut down or compacted.
+       stopped first: if DiskTray can't tell whether it's running, or it's still running
+       after `docker desktop stop`, nothing gets shut down or compacted.
    - Takes about 10–20 min and asks for admin. **Start Docker Desktop afterwards** is
      ticked when compacting right away and Docker Desktop is running as the dialog opens.
      When compacting waits for WSL to go idle, it starts unticked: the user is the one who
@@ -204,19 +209,40 @@ user clicks **Clean up**.
   idle, or stop Docker Desktop (`docker desktop stop`) → `wsl --shutdown` → the Compactor
   compacts → `docker desktop start` if ticked, even when compacting failed. The admin
   prompt comes first, off the UI thread, while DiskTray still has the foreground from the
-  click, so it shows in front rather than flashing in the taskbar after a long prune.
-  Turning it down still prunes, and leaves WSL and Docker running. Notifications say when
-  compacting starts and how it all went ("C: got back 135 GiB", each drive with its own
-  total).
+  click, so it shows in front rather than flashing in the taskbar after a long prune. The
+  dialog stays open (greyed out) until the prompt is answered, and the prompt belongs to
+  it. Turning it down still prunes, and leaves WSL and Docker running. Notifications say
+  when compacting starts and how it all went ("C: got back 135 GiB", each drive with its
+  own total).
+  - If `docker desktop stop` fails, DiskTray asks Docker again, since the command can fail
+    late, after Docker has stopped. Stopped, the run goes on. Still running, nothing is
+    shut down or compacted and Docker is left running. Can't tell, nothing is shut down
+    or compacted, and Docker is started again if ticked, in case it had stopped (starting
+    a running Docker does nothing). If `wsl --shutdown` fails, nothing is compacted (the
+    disks would still be open), and Docker is started again if ticked.
+  - A disk whose path the Compactor wouldn't take (say a Docker folder written with
+    forward slashes that can't be read plainly) is left out and named in the result; the
+    others are still compacted.
+  - The Compactor reports at least once a second while it works. If it goes 2 minutes
+    without a word, DiskTray stops waiting and says it can't tell whether compacting
+    finished. It doesn't start Docker then, since the Compactor may still be using its
+    disk; the result says to start it once the Compactor has ended.
 - **Docker Desktop 4.39 or later**, with the WSL 2 backend: stopping, starting and asking
   about it use its `docker desktop` commands (added in 4.37, generally available in 4.39).
-- **Exiting during a run.** Exit asks first once the run has stopped Docker or shut down
-  WSL. From that point the run is recorded in `cleanup-running.json`, so if DiskTray goes
-  away before the end (Exit, an upgrade, a crash), its next start waits for the Compactor
-  to finish, starts Docker Desktop if the run was going to, and says what happened.
-- **Dry run.** `DiskTray.exe --dry-run` (or `scripts/deploy.sh --dry-run`) runs the same
-  steps but only logs the ones that change something; the Compactor still asks for
-  admin and reports each disk without compacting it. The dialog says so at the top.
+- **Exiting during a run.** Exit asks first while the run prunes (nothing gets
+  compacted then), stops Docker Desktop or shuts down WSL (nothing gets compacted, and
+  the next start starts Docker again if the run was going to), or compacts (it carries
+  on without DiskTray). Waiting for admin or for WSL to go idle, Exit just cancels. From
+  stopping Docker on, the run is recorded in `cleanup-running.json`, along with whether
+  the Compactor had been told to go. If DiskTray goes away before the end (Exit, an
+  upgrade, a crash), its next start waits for the Compactor in this Windows session to
+  end (Clean up waits too), starts Docker Desktop if the run was going to, and says what
+  happened: compacting carried on, or nothing was compacted.
+- **Dry run.** `DiskTray.exe --dry-run` runs the same steps but only logs the ones that
+  change something; the Compactor still asks for admin and reports each disk without
+  compacting it. The dialog says so at the top. It needs the installed copy to reach the
+  Compactor: a development copy (`scripts/deploy.sh --dry-run`) can't start it, dry run
+  or not (see "Only from an admin-only folder").
 
 ### Volume confidence
 
@@ -243,10 +269,16 @@ parent can be read and has nothing by that name at all (not a folder, file or li
 `\\wsl.localhost` can show a Linux symlink as either), so a hiccup reading it can't
 pre-select anything.
 
+A project's known folder being gone still isn't enough on its own. It's only called
+deleted when nothing else says the project lives on: the other folder known for it (from
+a container now, or remembered) isn't there either, or is in a distro that was recorded,
+and no folder by its name turns up in the code folders. So a project deleted and cloned
+again somewhere new, or moved, keeps its volumes unpicked.
+
 | Tag | Pre-selected |
 |---|---|
 | Folder deleted | Yes |
-| Not checked (its distro isn't running, or was assumed) | No |
+| Not checked (its distro isn't running or was assumed, or it may be somewhere else) | No |
 | No matching folder in ~/git | No |
 | Folder exists | Never |
 | No project (unnamed volume) | Never |
@@ -287,9 +319,9 @@ General.
   native exe with NativeAOT): the only part that needs admin, and it does nothing else.
   Its manifest requires admin, so starting it shows the admin prompt. It gets the VHDX
   paths on its command line (fixed once the prompt shows; only full local `.vhdx` paths
-  written one way are accepted: no `.`/`..`, forward slashes, empty parts, parts ending
-  in a dot or space, wildcards or `:stream`, and the app checks them before prompting
-  too), waits for the app to say
+  written plainly are accepted: no `.`/`..`, forward slashes, empty parts, parts ending
+  in a dot or space, wildcards or `:stream`, and the app leaves out any other before
+  prompting), waits for the app to say
   "go", then compacts each detached disk with Windows' virtual disk API
   (`CompactVirtualDisk`, what `Optimize-VHD` and diskpart use), which works whatever
   file system is inside. The app stops Docker Desktop and shuts down WSL itself, without
@@ -300,10 +332,20 @@ General.
     the app checks that the process on the other end is the one it started. Once it has
     connected, the pipe closing (not the process ending) means it's gone, so its last
     status is always read.
-    The Compactor sends status and log lines; the app sends "go" or "cancel". It writes
-    no files, since anything it wrote in a folder the user can change could be
-    redirected elsewhere with admin rights. If the app goes away while it's waiting, it
-    stops; once compacting has started it finishes.
+    The Compactor sends status and log lines; the app sends "go" or "cancel". The
+    Compactor's end is opened for overlapped I/O: on a handle opened without it, Windows
+    runs one call at a time, so its reader thread, always waiting for the app's next
+    line, would hold up every status it sends. It writes no files, since anything it
+    wrote in a folder the user can change could be redirected elsewhere with admin
+    rights. If the app goes away while it's waiting, it stops; once it's been told to go
+    it finishes, even if the app goes straight after.
+  - **Only what the user could change already.** The disk paths come from settings
+    anything running as the user can change (the WSL registry key, Docker's settings
+    file), so the Compactor only compacts a disk the account that asked could write to
+    itself. It checks with the token of the DiskTray on the other end of the pipe, which
+    runs without admin: it opens the file as that account, without changing it. A disk
+    only an admin can change (another account's, or a virtual machine's) is refused, and
+    so is everything when that account can't be told.
   - **Only from an admin-only folder.** Before the admin prompt, the app checks that it
     can't change the Compactor itself: write, replace or re-permission the exe or
     anything in its folder, add a file there (a planted DLL would load into it), or move
@@ -311,26 +353,33 @@ General.
     closing again. The installer's `Program Files\DiskTray` passes. A copy in
     `%LOCALAPPDATA%` doesn't, because anything running as the user could swap it before
     the prompt is answered, so Clean up still prunes there but won't compact. DiskTray
-    itself running as admin won't compact either (the Compactor would start with no
-    prompt, and the check can't see what a normal process could change); with UAC off
-    there's no line to protect, so it's skipped.
+    itself running with admin rights in effect won't compact either, whether it was
+    started as administrator or runs as the built-in Administrator account (which UAC
+    doesn't split): the Compactor would start with no prompt, and the check can't see
+    what a normal process could change. With UAC off there's no line to protect, so it's
+    skipped.
   - **Native, not .NET.** A .NET runtime in an admin process honours settings in the
     user's environment, which anything running as the user can change, such as ones
     that load a profiler or startup hook. The NativeAOT exe has neither, and loads
-    `virtdisk.dll` and `kernel32.dll` only from System32.
-  - **Pins each disk's path while compacting it.** The folders above a disk can usually
-    be changed by the user, so each one is held open without delete sharing while that
-    disk is compacted (none can be renamed, removed or replaced), and the disk is refused
-    if any of them, or the file, is a link or the file isn't where its path says. A disk
-    reached through a junction (one moved to another drive that way) isn't compacted.
+    `virtdisk.dll`, `kernel32.dll` and `advapi32.dll` only from System32. Windows still
+    looks for some DLLs it loads at start next to the exe first, which is one reason
+    the folder check above matters.
+  - **Pins each disk's path while compacting it.** The disk and the folders above it can
+    usually be changed by the user, so the disk and each folder are held open without
+    delete sharing while that disk is checked and compacted (none can be renamed,
+    removed or replaced), and the disk is refused if any of them is a link, the disk
+    has another name (a hard link), or it isn't where its path says (an 8.3 short name
+    is refused that way). A disk reached through a junction (one moved to another drive
+    that way) isn't compacted.
   - It waits up to a minute for WSL to let go of each disk after the shutdown, and
     reports a disk that stays in use (something started WSL again) without compacting
     it.
 - **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
-  readings in `usage.json` (kept for 30 days after a disk was last seen, so switching
-  detection off for a while doesn't lose them), what alerts have fired in `alerts.json`, Compose
-  projects' folders in `projects.json` and the last large-file scan in
-  `largefiles.json` there, and logs go to
+  readings in `usage.json` (kept for 30 days after a disk was last detected, so
+  switching detection off for a while doesn't lose them), what alerts have fired in
+  `alerts.json`, Compose projects' folders in `projects.json`, the last large-file scan
+  in `largefiles.json` and a running clean up in `cleanup-running.json` there, with the
+  pictures for notifications in `notifications\`. Logs go to
   `%LOCALAPPDATA%\DiskTray\logs\disktray.log` (the Compactor's lines included).
 - **Installer.** A per-machine MSI built with WiX 5 (`installer/`), which installs to
   `C:\Program Files\DiskTray`, so only admins can change what Clean up runs as admin. It
@@ -344,20 +393,27 @@ General.
     development copy, say), so the new one doesn't find it and quit;
   - starts DiskTray afterwards through Explorer, so it never runs as admin even when the
     install did (not on silent installs; after a repair too);
+  - starts DiskTray again after a silent upgrade a user started (winget, say), since it
+    was closed for it, but not after a silent first install or anything run as SYSTEM;
   - on an uninstall (not an upgrade), runs `DiskTray.exe --remove-user-data`, which closes
     the running copy and removes what DiskTray added for that user: the Run and Startup
     apps values, the toast registration Windows notifications need for an unpackaged
-    app, and `%LOCALAPPDATA%\DiskTray`. Other users' settings stay behind. This runs
-    before Windows Installer's own steps and can't be undone, so an uninstall that's
-    cancelled or fails after it has still removed them.
+    app, and `%LOCALAPPDATA%\DiskTray`. Other users' settings stay behind. It runs once
+    the uninstall is under way, after the admin prompt, so turning the prompt down keeps
+    them. It can't be undone, so an uninstall that fails after it has still removed them.
 
-  As admin, on an upgrade or uninstall, it also asks DiskTray running for other signed-in
-  users to close, and ends it if it hasn't after 15 s. A rebuilt MSI of the same version
+  As admin, on an upgrade or uninstall, it also closes DiskTray running for other
+  signed-in users: it sends a close message and ends it if it hasn't gone after 15 s.
+  Windows doesn't pass that message to other sessions, so in practice their copies are
+  ended, and may leave a stale tray icon until hovered. While a Compactor is running
+  (a disk is being compacted), the install stops with a message to try again once it's
+  done, rather than end it or replace it part way. A rebuilt MSI of the same version
   replaces the installed one rather than installing beside it.
 
   Releases come from the GitHub Actions workflow, since NativeAOT for Windows needs
-  Windows and the C++ build tools. It runs the tests and builds the MSI on pushes to
-  main, pull requests and tags, with a `SHA256SUMS.txt`; on a `v1.2.3` tag matching
+  Windows and the C++ build tools. It runs the tests (Core on Linux; everything,
+  including the Windows tests below, on Windows) and builds the MSI on pushes to main,
+  pull requests and tags, with a `SHA256SUMS.txt`; on a `v1.2.3` tag matching
   `Version` in `Directory.Build.props` it publishes a release with both attached. The
   WiX build refuses a Compactor that isn't the native one. `scripts/build-msi.sh` builds
   a `-dev` MSI from WSL for trying the installer, with a plain .NET Compactor (WiX only
@@ -386,4 +442,13 @@ General.
   `app.ico` to copy over it after changing the drawing.
 - **Build.** `EnableWindowsTargeting` lets everything build from WSL. The app only
   runs on Windows. Tests use xUnit v3 on Microsoft.Testing.Platform (opted in through
-  `global.json`).
+  `global.json`). `tests/DiskTray.Core.Tests` runs anywhere. `tests/DiskTray.Windows.Tests`
+  runs only on Windows (`dotnet test` elsewhere leaves it out) and covers what runs as
+  admin, on real files, pipes and processes in temp folders: the pipe between the app
+  and the Compactor (and who may connect to it), the path hold (links, junctions, hard
+  links, short names), the account check (including an admin's everyday token against
+  a file only admins can change), the in-use check, the folder check, a compact that
+  gives back the space a test VHDX held after its data was cleared, and the Compactor
+  exe itself: compacting, a dry run, and quitting on bad arguments, no app, or the app
+  going away. The tests that need admin skip without it, and fail instead in the
+  GitHub Actions build (`DISKTRAY_REQUIRE_ADMIN_TESTS`), whose runner has it.

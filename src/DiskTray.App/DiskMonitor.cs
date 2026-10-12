@@ -11,11 +11,12 @@ internal sealed class DiskMonitor(DiskScanner scanner, UsageMeter meter, UsageCa
     /// <summary>Adds up pinned folders in the background.</summary>
     public FolderSizer Folders => folders;
 
-    public DiskSnapshot Measure(IReadOnlyList<TrayPin>? pins = null, DetectionOptions? detect = null)
+    /// <param name="askWsl">See <see cref="UsageMeter.Measure"/>.</param>
+    public DiskSnapshot Measure(IReadOnlyList<TrayPin>? pins = null, DetectionOptions? detect = null, bool askWsl = true)
     {
         pins ??= TrayPin.Defaults;
         folders.Track(pins.Where(p => p.Kind == PinKind.Path && p.Target is not null).Select(p => p.Target!));
-        var snapshot = meter.Measure(scanner.Scan(pins, detect));
+        var snapshot = meter.Measure(scanner.Scan(pins, detect), askWsl);
         UsageCacheFile.Save(cache);
         return snapshot;
     }

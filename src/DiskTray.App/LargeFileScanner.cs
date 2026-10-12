@@ -60,7 +60,7 @@ internal sealed class LargeFileScanner : IDisposable
         }
     }
 
-    public void ScanNow() => _ = Task.Run(() => Scan(force: true));
+    private void ScanNow() => _ = Task.Run(() => Scan(force: true));
 
     public void Dispose() => _timer.Dispose();
 

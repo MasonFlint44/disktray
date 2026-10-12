@@ -61,10 +61,8 @@ internal static unsafe partial class VirtualDisk
                         return Describe("check on", error);
                     }
 
-                    if (state.CompletionValue > 0)
-                    {
-                        progress((int)Math.Min(100, state.CurrentValue * 100 / state.CompletionValue));
-                    }
+                    // Every second, changed or not, so the app can tell this is still going.
+                    progress(state.CompletionValue > 0 ? (int)Math.Min(100, state.CurrentValue * 100 / state.CompletionValue) : 0);
 
                     if (state.OperationStatus != ErrorIoPending)
                     {

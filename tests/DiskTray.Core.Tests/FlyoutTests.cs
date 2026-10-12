@@ -87,6 +87,17 @@ public class FlyoutLayoutTests
     }
 
     [Fact]
+    public void Counts_every_disk_clean_up_compacts_in_the_total_pinned_or_not()
+    {
+        var flyout = FlyoutLayout.Build(
+            Measured(), new AlertThresholds(), SurfaceTheme.Dark, Now, TimeSpan.FromMinutes(5), provider: CultureInfo.InvariantCulture, zone: TimeZoneInfo.Utc,
+            pins: [new TrayPin(PinKind.Drive)]);
+
+        Assert.Equal("118 GiB", flyout.ReclaimableTotal);
+        Assert.Equal("Docker 93 GiB · Ubuntu 25 GiB", flyout.ReclaimableBreakdown);
+    }
+
+    [Fact]
     public void Puts_the_largest_disk_file_first()
     {
         var snapshot = Measured();

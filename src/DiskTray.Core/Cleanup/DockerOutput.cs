@@ -36,7 +36,7 @@ public static partial class DockerOutput
 
     public static readonly IReadOnlyList<string> DiskUsageCommand = ["system", "df", "-v", "--format", "json"];
 
-    /// <summary>Every container's ID, one per line, for <see cref="InspectCommand"/>.</summary>
+    /// <summary>Every container's ID, one per line, for <see cref="InspectCommands"/>.</summary>
     public static readonly IReadOnlyList<string> ContainerIdsCommand = ["ps", "--all", "--quiet", "--no-trunc"];
 
     /// <summary><c>docker desktop status --format json</c>; <see cref="ParseDesktopStatus"/> reads it.</summary>
@@ -52,7 +52,12 @@ public static partial class DockerOutput
     public static IReadOnlyList<string> DesktopStopCommand(TimeSpan timeout) =>
         ["desktop", "stop", "--timeout", ((int)timeout.TotalSeconds).ToString(CultureInfo.InvariantCulture)];
 
-    public static IReadOnlyList<string> InspectCommand(IEnumerable<string> ids) => ["inspect", .. ids];
+    /// <summary>How many containers one <c>docker inspect</c> asks about, so its command line stays well short of Windows' limit.</summary>
+    public const int InspectBatch = 100;
+
+    /// <summary><c>docker inspect</c> for the containers, <see cref="InspectBatch"/> at a time.</summary>
+    public static IReadOnlyList<IReadOnlyList<string>> InspectCommands(IEnumerable<string> ids) =>
+        ids.Chunk(InspectBatch).Select(batch => (IReadOnlyList<string>)["inspect", .. batch]).ToList();
 
     /// <summary>Removes the volumes by name. Never <c>volume prune</c>, which would take every unused one.</summary>
     public static IReadOnlyList<string> RemoveVolumesCommand(IEnumerable<string> names) => ["volume", "rm", .. names];

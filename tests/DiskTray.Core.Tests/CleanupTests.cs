@@ -83,6 +83,19 @@ internal sealed class FakeFolders : IFolderLookup
 
 public class DockerOutputTests
 {
+    [Fact]
+    public void Inspects_containers_in_batches_short_enough_for_one_command_line()
+    {
+        var ids = Enumerable.Range(0, 250).Select(i => i.ToString("x64")).ToList();
+
+        var commands = DockerOutput.InspectCommands(ids);
+
+        Assert.Equal(3, commands.Count);
+        Assert.All(commands, c => Assert.Equal("inspect", c[0]));
+        Assert.Equal(ids, commands.SelectMany(c => c.Skip(1)));
+        Assert.All(commands, c => Assert.True(string.Join(' ', c).Length < 8000));
+    }
+
     [Theory]
     [InlineData("3.111GB", 3_111_000_000L)]
     [InlineData("21.13kB", 21_130L)]
@@ -395,11 +408,75 @@ public class VolumeConfidenceTests
         var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
         var cache = new ProjectFolderCache();
         cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/old/pg") }, DateTimeOffset.UnixEpoch);
+        var folders = Folders();
+        folders.Existing.Add("Ubuntu:/home/me/old/pg");
+
+        var group = Assert.Single(VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), cache, [], folders));
+
+        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/old/pg"), group.Folder);
+        Assert.Equal(FolderCheck.Exists, group.Check);
+    }
+
+    [Fact]
+    public void Doesnt_call_a_project_deleted_while_its_containers_point_somewhere_it_may_be()
+    {
+        // Remembered at old/pg, which is gone; today's containers say /home/me/pg, in a distro
+        // that wasn't recorded and where it isn't, so it may be in another one.
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/old/pg") }, DateTimeOffset.UnixEpoch);
 
         var group = Assert.Single(VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), cache, [], Folders()));
 
-        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/old/pg"), group.Folder);
-        Assert.Equal(FolderCheck.Deleted, group.Check);
+        Assert.Equal(FolderCheck.NotChecked, group.Check);
+        Assert.True(group.FolderGone);
+        Assert.False(group.PreSelected);
+        Assert.Equal("pg · ~/old/pg is gone, but the project may be somewhere else", CleanupLayout.GroupLine(group).Text);
+    }
+
+    [Fact]
+    public void Finds_a_project_at_the_folder_its_containers_point_to_now()
+    {
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/old/pg") }, DateTimeOffset.UnixEpoch);
+        var folders = Folders();
+        folders.Existing.Add("Ubuntu:/home/me/pg");
+
+        var group = Assert.Single(VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), cache, [], folders));
+
+        Assert.Equal(FolderCheck.Exists, group.Check);
+        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/pg"), group.Folder);
+    }
+
+    [Fact]
+    public void Doesnt_call_a_project_deleted_once_its_cloned_again_somewhere_else()
+    {
+        // Remembered at ~/git/acme.web-app, since deleted, and cloned again into ~/work,
+        // a code folder, with no containers in between.
+        var folders = Folders();
+        folders.Existing.Add("Ubuntu:/home/me/work/acme.web-app");
+        var groups = VolumeConfidence.Group(Unused, VolumeConfidence.FoldersFromContainers(Containers, "Ubuntu"), Cache(), [new ProjectFolder("Ubuntu", "/home/me/work")], folders);
+
+        var acme = groups.Single(g => g.Project == "acmeweb-app_devcontainer");
+        Assert.Equal(FolderCheck.Exists, acme.Check);
+        Assert.True(acme.Guessed);
+        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/work/acme.web-app"), acme.Folder);
+        Assert.DoesNotContain(groups, g => g.PreSelected);
+    }
+
+    [Fact]
+    public void Doesnt_call_a_project_deleted_when_its_other_folder_cant_be_checked()
+    {
+        // Recorded in Ubuntu (gone); the containers now say Debian, which isn't running.
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/old/pg") }, DateTimeOffset.UnixEpoch);
+        var live = new Dictionary<string, ProjectFolder> { ["pg"] = new("Debian", "/home/me/pg") };
+
+        var group = Assert.Single(VolumeConfidence.Group(unused, live, cache, [], Folders()));
+
+        Assert.Equal(FolderCheck.NotChecked, group.Check);
     }
 
     [Theory]

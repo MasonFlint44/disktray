@@ -69,10 +69,11 @@ public sealed partial record CompactorArgs(string Pipe, IReadOnlyList<string> Di
     }
 
     /// <summary>
-    /// A full local path to a .vhdx file, e.g. <c>C:\…\ext4.vhdx</c>, written only one way:
+    /// A full local path to a .vhdx file, e.g. <c>C:\…\ext4.vhdx</c>, written plainly:
     /// backslashes, no <c>.</c> or <c>..</c>, no empty parts or parts ending in a dot or space
-    /// (which Windows quietly drops), no wildcards and no <c>:stream</c>. So the path the
-    /// user saw is the file that gets compacted.
+    /// (which Windows quietly drops), no wildcards and no <c>:stream</c>. An 8.3 short name
+    /// (<c>PROGRA~1</c>) passes here; the Compactor's path hold refuses it, since the file's
+    /// real path then differs from the one given.
     /// </summary>
     public static bool IsVhdx(string path)
     {

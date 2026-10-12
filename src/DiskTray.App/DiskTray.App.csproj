@@ -24,4 +24,8 @@
     <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
     <PackageReference Include="WPF-UI" Version="4.3.0" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The pipe to the Compactor and the folder check are tested on Windows. -->
+    <InternalsVisibleTo Include="DiskTray.Windows.Tests" />
+  </ItemGroup>
 </Project>
