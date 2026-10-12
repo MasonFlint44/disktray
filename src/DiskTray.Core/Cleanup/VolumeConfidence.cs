@@ -8,7 +8,10 @@ public enum FolderCheck
     /// <summary>The project's folder is known and is gone. The only case that's pre-selected.</summary>
     Deleted,
 
-    /// <summary>Checking the folder, or searching for one, would mean starting a distro.</summary>
+    /// <summary>
+    /// Checking the folder, or searching for one, would mean starting a distro; or the folder
+    /// isn't where it was assumed to be, in a distro that wasn't recorded.
+    /// </summary>
     NotChecked,
 
     /// <summary>The folder isn't known and nothing in the code folders matches the project's name.</summary>
@@ -81,14 +84,14 @@ public static class VolumeConfidence
                 continue;
             }
 
-            var folder = fromContainers.GetValueOrDefault(project) ?? cache.Get(project);
-            if (folder is not null)
+            if (FolderOf(project, fromContainers, cache) is { } folder)
             {
                 var check = lookup.Exists(folder) switch
                 {
                     true => FolderCheck.Exists,
-                    false => FolderCheck.Deleted,
-                    null => FolderCheck.NotChecked,
+                    // Only a folder whose distro is known for sure can be called gone.
+                    false when !folder.DistroGuessed => FolderCheck.Deleted,
+                    _ => FolderCheck.NotChecked,
                 };
                 groups.Add(new VolumeGroup(project, check, folder, false, volumes, []));
             }
@@ -113,9 +116,23 @@ public static class VolumeConfidence
     }
 
     /// <summary>
+    /// A recorded folder beats one whose distro was guessed, whether it's from a container
+    /// now or remembered; then a container's beats the remembered one.
+    /// </summary>
+    private static ProjectFolder? FolderOf(string project, IReadOnlyDictionary<string, ProjectFolder> fromContainers, ProjectFolderCache cache)
+    {
+        var live = fromContainers.GetValueOrDefault(project);
+        var remembered = cache.Get(project);
+        return live is { DistroGuessed: false } ? live
+            : remembered is { DistroGuessed: false } ? remembered
+            : live ?? remembered;
+    }
+
+    /// <summary>
     /// Each Compose project's folder, from its containers' labels. VS Code's
     /// <c>devcontainer.local_folder</c> wins over Compose's working folder, which doesn't say
-    /// which distro it's in; that comes from a bind mount, or else is the default distro.
+    /// which distro it's in; that comes from a bind mount, or else is assumed to be the default
+    /// distro, marked <see cref="ProjectFolder.DistroGuessed"/>.
     /// </summary>
     public static IReadOnlyDictionary<string, ProjectFolder> FoldersFromContainers(
         IReadOnlyList<DockerContainer> containers,
@@ -136,17 +153,17 @@ public static class VolumeConfidence
                 continue;
             }
 
-            string? distro = byProject.SelectMany(c => c.BindSources)
+            string? recorded = byProject.SelectMany(c => c.BindSources)
                 .Select(ProjectFolder.DistroOfBindMount)
                 .OfType<string>()
-                .FirstOrDefault() ?? defaultDistro;
+                .FirstOrDefault();
             var working = byProject
-                .Select(c => ProjectFolder.FromWorkingDir(c.Labels.GetValueOrDefault(DockerOutput.WorkingDirLabel), distro))
+                .Select(c => ProjectFolder.FromWorkingDir(c.Labels.GetValueOrDefault(DockerOutput.WorkingDirLabel), recorded ?? defaultDistro))
                 .OfType<ProjectFolder>()
                 .FirstOrDefault();
             if (working is not null)
             {
-                folders[byProject.Key] = working;
+                folders[byProject.Key] = working with { DistroGuessed = working.Distro is not null && recorded is null };
             }
         }
 

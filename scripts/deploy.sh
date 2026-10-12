@@ -24,8 +24,10 @@ if [[ -f "$target/DiskTray.exe" ]]; then
 fi
 
 dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained false -o "$target" -v quiet -nologo
-# The elevated helper that compacts the disks lives next to DiskTray.exe.
-dotnet publish src/DiskTray.Compactor -c Release -r win-x64 --self-contained false -o "$target" -v quiet -nologo
+# The elevated helper that compacts the disks lives next to DiskTray.exe. Here it's a plain
+# .NET build, since NativeAOT for Windows can't be built from Linux; this copy can't compact
+# anyway, being in a folder that doesn't need admin to change.
+dotnet publish src/DiskTray.Compactor -c Release -r win-x64 --self-contained false -p:PublishAot=false -o "$target" -v quiet -nologo
 
 case "${1:-}" in
   --no-start) ;;

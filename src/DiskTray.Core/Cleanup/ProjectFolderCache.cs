@@ -13,18 +13,33 @@ public sealed class ProjectFolderCache
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// The folder remembered for the project. Entries saved before guesses were marked count
+    /// as guessed when they're in a distro, to be safe.
+    /// </summary>
     public ProjectFolder? Get(string project) =>
-        _entries.TryGetValue(project, out var entry) ? new ProjectFolder(entry.Distro, entry.Path) : null;
+        _entries.TryGetValue(project, out var entry)
+            ? new ProjectFolder(entry.Distro, entry.Path) { DistroGuessed = entry.DistroGuessed ?? entry.Distro is not null }
+            : null;
 
-    /// <summary>Remembers the folders, and says whether anything changed.</summary>
+    /// <summary>
+    /// Remembers the folders, and says whether anything changed. A folder whose distro was
+    /// guessed never replaces one that was recorded.
+    /// </summary>
     public bool Record(IReadOnlyDictionary<string, ProjectFolder> folders, DateTimeOffset now)
     {
         bool changed = false;
         foreach (var (project, folder) in folders)
         {
-            if (Get(project) != folder)
+            var known = Get(project);
+            if (folder.DistroGuessed && known is { DistroGuessed: false })
             {
-                _entries[project] = new Entry(folder.Distro, folder.Path, now);
+                continue;
+            }
+
+            if (known != folder || known.DistroGuessed != folder.DistroGuessed)
+            {
+                _entries[project] = new Entry(folder.Distro, folder.Path, now, folder.DistroGuessed);
                 changed = true;
             }
         }
@@ -62,5 +77,6 @@ public sealed class ProjectFolderCache
         return cache;
     }
 
-    private sealed record Entry(string? Distro, string Path, DateTimeOffset SeenAt);
+    /// <param name="DistroGuessed">Null in files saved before this was recorded.</param>
+    private sealed record Entry(string? Distro, string Path, DateTimeOffset SeenAt, bool? DistroGuessed = null);
 }

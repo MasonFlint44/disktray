@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DiskTray.Core.Detection;
 
 namespace DiskTray.Core.Cleanup;
 
@@ -38,12 +39,18 @@ public static partial class DockerOutput
     /// <summary>Every container's ID, one per line, for <see cref="InspectCommand"/>.</summary>
     public static readonly IReadOnlyList<string> ContainerIdsCommand = ["ps", "--all", "--quiet", "--no-trunc"];
 
-    /// <summary><c>docker desktop status --format json</c>; <see cref="ParseDesktopRunning"/> reads it.</summary>
+    /// <summary><c>docker desktop status --format json</c>; <see cref="ParseDesktopStatus"/> reads it.</summary>
     public static readonly IReadOnlyList<string> DesktopStatusCommand = ["desktop", "status", "--format", "json"];
+
+    public static readonly IReadOnlyList<string> DesktopStartCommand = ["desktop", "start", "--detach"];
 
     public static readonly IReadOnlyList<string> PruneBuildCacheCommand = ["builder", "prune", "--force"];
 
     public static readonly IReadOnlyList<string> PruneDanglingImagesCommand = ["image", "prune", "--force"];
+
+    /// <summary>Stops Docker Desktop, waiting up to <paramref name="timeout"/> for it.</summary>
+    public static IReadOnlyList<string> DesktopStopCommand(TimeSpan timeout) =>
+        ["desktop", "stop", "--timeout", ((int)timeout.TotalSeconds).ToString(CultureInfo.InvariantCulture)];
 
     public static IReadOnlyList<string> InspectCommand(IEnumerable<string> ids) => ["inspect", .. ids];
 
@@ -202,27 +209,83 @@ public static partial class DockerOutput
     public static IReadOnlyList<string> ParseIds(string output) =>
         output.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToList();
 
-    /// <summary>Whether <see cref="DesktopStatusCommand"/> says Docker Desktop is running.</summary>
-    public static bool ParseDesktopRunning(string json)
+    /// <summary>
+    /// What <see cref="DesktopStatusCommand"/> says: false for "stopped", true for anything
+    /// else it reports ("running", "starting", "paused" by Resource Saver), null if it isn't
+    /// that output.
+    /// </summary>
+    public static bool? ParseDesktopStatus(string json)
     {
         try
         {
             using var document = JsonDocument.Parse(json);
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                && string.Equals(Text(document.RootElement, "Status"), "running", StringComparison.OrdinalIgnoreCase);
+            return document.RootElement.ValueKind == JsonValueKind.Object && Text(document.RootElement, "Status") is { Length: > 0 } status
+                ? !string.Equals(status, "stopped", StringComparison.OrdinalIgnoreCase)
+                : null;
         }
         catch (JsonException)
         {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether Docker Desktop is running, or null when that can't be told, which callers
+    /// must treat as "maybe": not installed means no; otherwise what
+    /// <see cref="DesktopStatusCommand"/> printed, or failing that whether its WSL distros
+    /// are running.
+    /// </summary>
+    /// <param name="statusOutput">What the status command printed, or null if it failed.</param>
+    /// <param name="distros">The running distros, or null if WSL couldn't be asked.</param>
+    public static bool? DesktopRunning(bool installed, string? statusOutput, IReadOnlySet<string>? distros)
+    {
+        if (!installed)
+        {
             return false;
         }
+
+        if (statusOutput is not null && ParseDesktopStatus(statusOutput) is { } running)
+        {
+            return running;
+        }
+
+        return distros?.Any(WslDistro.IsDockerOwnedName);
+    }
+
+    /// <summary>
+    /// How much a prune says it freed: <c>image prune</c>'s "Total reclaimed space: 1.2GB"
+    /// or <c>builder prune</c>'s "Total: 1.2GB". Null if it doesn't say.
+    /// </summary>
+    public static long? ParseReclaimed(string output)
+    {
+        foreach (string line in output.Split('\n'))
+        {
+            if (ReclaimedPattern().Match(line.Trim()) is { Success: true } match)
+            {
+                return ParseSize(match.Groups[1].Value);
+            }
+        }
+
+        return null;
     }
 
     private static IEnumerable<JsonElement> Items(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var items) && items.ValueKind == JsonValueKind.Array ? items.EnumerateArray() : [];
 
+    /// <summary>A field as text. Numbers and true/false come back as Docker prints them, in case a version stops quoting them.</summary>
     private static string? Text(JsonElement parent, string name) =>
-        parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        parent.TryGetProperty(name, out var value)
+            ? value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => value.GetRawText(),
+                _ => null,
+            }
+            : null;
 
     [GeneratedRegex(@"^([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)$")]
     private static partial Regex SizePattern();
+
+    [GeneratedRegex(@"^Total(?: reclaimed space)?:\s*(\S+)$")]
+    private static partial Regex ReclaimedPattern();
 }

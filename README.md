@@ -1,8 +1,8 @@
 # DiskTray
 
-A Windows tray app that shows how much of drive C: your WSL and Docker virtual disks
-take up, warns when space runs low, and helps reclaim it (prune Docker, compact
-the VHDX files).
+A Windows tray app that shows how much of your Windows drive (usually C:) your WSL and
+Docker virtual disks take up, warns when space runs low, and helps reclaim it (prune
+Docker, compact the VHDX files).
 
 <p align="center">
   <img src="docs/images/flyout-dark.png" width="360" alt="The DiskTray flyout in dark mode: a donut chart of drive C: split into Docker data, Ubuntu, Windows and other, and free space, with a low-space warning, other large files with pin buttons, and 112 GiB reclaimable by compacting">
@@ -11,7 +11,7 @@ the VHDX files).
 
 Each tray icon is a pie (or bar) of one disk file or drive. The lighter shade is space
 the file holds but isn't using, which compacting gives back. An amber or red ring means
-C: is below your warning level:
+the drive is below your warning level:
 
 <p align="center">
   <picture>
@@ -45,7 +45,15 @@ Download the MSI from [Releases](../../releases) and run it. It installs to
 `C:\Program Files\DiskTray` and asks for admin once, so that the part of Clean up that
 runs as admin can't be changed by other programs. It isn't signed, so Windows shows
 "Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
-Uninstall it from **Settings › Apps**.
+Each release has a `SHA256SUMS.txt` to check the download against
+(`Get-FileHash DiskTray-<version>-x64.msi`).
+
+Uninstall it from **Settings › Apps**. That also removes your DiskTray settings, logs and
+caches (`%LOCALAPPDATA%\DiskTray`) and its Startup apps entry. Docker and WSL aren't
+touched.
+
+Clean up needs Docker Desktop 4.39 or later, using the WSL 2 backend, to prune and to
+stop and start Docker around a compact.
 
 New tray icons start out in the taskbar's overflow (`^`). To keep them visible, turn
 them on under **Settings → Personalization → Taskbar → Other system tray icons**, or
@@ -75,9 +83,14 @@ dotnet test
 
 ## Building the installer
 
-`scripts/build-msi.sh` builds `artifacts/msi/DiskTray-<version>-x64.msi` (it also needs
-a .NET 6 or later SDK on Windows, since WiX only runs there). GitHub Actions builds the
-same MSI on every push and attaches it to a release for each `v<version>` tag.
+Releases are built by GitHub Actions, on pushes to main, pull requests and tags, and
+attached to a release for each `v<version>` tag. The Compactor, the part that runs as
+admin, is compiled ahead of time with NativeAOT, which needs Windows and the C++ build
+tools.
+
+`scripts/build-msi.sh` builds `artifacts/msi/DiskTray-<version>-x64-dev.msi` from WSL,
+for trying the installer out, with a plain .NET Compactor (it also needs a .NET 6 or
+later SDK on Windows, since WiX only runs there).
 
 ## Development copy
 

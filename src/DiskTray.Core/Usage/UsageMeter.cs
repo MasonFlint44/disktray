@@ -9,9 +9,11 @@ public sealed class UsageMeter(IWslCommands wsl, UsageCache cache, TimeProvider 
 {
     public DiskSnapshot Measure(DiskSnapshot snapshot)
     {
-        var running = wsl.RunningDistros();
+        // Not knowing what's running is the same as nothing running here: it only means
+        // falling back to the last reading.
+        var running = wsl.RunningDistros() ?? new HashSet<string>();
         var files = snapshot.Files.Select(f => Measure(f, running)).ToList();
-        cache.RetainOnly(files.Select(f => f.Path));
+        cache.RetainOnly(files.Select(f => f.Path), clock.GetUtcNow());
         return snapshot with { Files = files };
     }
 

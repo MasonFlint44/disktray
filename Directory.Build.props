@@ -7,7 +7,7 @@
     <!-- Lets the Windows-only projects build from WSL/Linux. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Shown in Settings › Apps. -->
-    <Version>0.1.0</Version>
+    <Version>0.1.1</Version>
     <Product>DiskTray</Product>
     <!-- DiskTray is in English, so leave out the runtime's translated messages. -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

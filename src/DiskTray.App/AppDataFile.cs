@@ -41,4 +41,17 @@ internal static class AppDataFile
             return false;
         }
     }
+
+    public static void Delete(string name)
+    {
+        string path = Path.Combine(Folder, name);
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Error($"Couldn't delete {path}", e);
+        }
+    }
 }

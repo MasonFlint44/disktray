@@ -35,15 +35,26 @@ jobs:
           $version = ([xml](Get-Content Directory.Build.props)).Project.PropertyGroup.Version
           if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match Version $version in Directory.Build.props" }
       - name: Publish
+        # The Compactor is compiled ahead of time (NativeAOT), which needs this Windows
+        # runner's C++ build tools.
         run: |
           dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained -o artifacts/publish
-          dotnet publish src/DiskTray.Compactor -c Release -r win-x64 --self-contained -o artifacts/publish
+          dotnet publish src/DiskTray.Compactor -c Release -r win-x64 -o artifacts/publish
       - name: Build the MSI
         run: dotnet build installer -c Release
+      - name: Checksum
+        shell: pwsh
+        working-directory: artifacts/msi
+        run: |
+          Get-ChildItem *.msi | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } |
+            Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
       - uses: actions/upload-artifact@v7
         with:
           name: msi
-          path: artifacts/msi/*.msi
+          path: |
+            artifacts/msi/*.msi
+            artifacts/msi/SHA256SUMS.txt
           if-no-files-found: error
 
   release:
@@ -57,6 +68,6 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: msi
-      - run: gh release create "$GITHUB_REF_NAME" *.msi --repo "$GITHUB_REPOSITORY" --title "DiskTray ${GITHUB_REF_NAME#v}" --generate-notes
+      - run: gh release create "$GITHUB_REF_NAME" *.msi SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "DiskTray ${GITHUB_REF_NAME#v}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

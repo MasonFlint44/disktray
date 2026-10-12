@@ -26,6 +26,14 @@ public class CompactorArgsTests
     [InlineData("C:\\disks\\a\".vhdx")]
     [InlineData("C:\\disks\\a\r\ncompact vdisk.vhdx")]
     [InlineData(@"C:\disks\..\Windows\data.vhdx")]
+    [InlineData(@"C:\disks/../Windows/data.vhdx")]
+    [InlineData(@"C:\disks\.\data.vhdx")]
+    [InlineData(@"C:\disks\\data.vhdx")]
+    [InlineData(@"C:\disks.\data.vhdx")]
+    [InlineData(@"C:\disks \data.vhdx")]
+    [InlineData(@"C:\disks\other.txt:data.vhdx")]
+    [InlineData(@"C:\disks\*.vhdx")]
+    [InlineData(@"\\?\C:\disks\data.vhdx")]
     public void Refuses_anything_but_a_local_vhdx(string disk)
     {
         Assert.Null(CompactorArgs.Parse((Args with { Disks = [disk] }).ToArgs(), out string? problem));
@@ -255,7 +263,15 @@ public class CompactorRunTests
 
 internal sealed class FakeDocker : IDockerCli
 {
+    public bool Installed { get; set; } = true;
+
     public bool DesktopRunning { get; set; } = true;
+
+    /// <summary>Set to make <c>docker desktop status</c> fail, as on an old Docker Desktop.</summary>
+    public bool StatusFails { get; set; }
+
+    /// <summary>What each command prints when it works, by its first arguments joined with spaces.</summary>
+    public Dictionary<string, string> Outputs { get; } = [];
 
     /// <summary>Commands that fail, by their first arguments joined with spaces.</summary>
     public HashSet<string> Failing { get; } = [];
@@ -267,16 +283,21 @@ internal sealed class FakeDocker : IDockerCli
         string command = string.Join(' ', args);
         if (command == string.Join(' ', DockerOutput.DesktopStatusCommand))
         {
-            return DesktopRunning ? """{"Status":"running"}""" : """{"Status":"stopped"}""";
+            return StatusFails ? null : DesktopRunning ? """{"Status":"running"}""" : """{"Status":"stopped"}""";
         }
 
         Calls.Add(command);
+        if (Failing.Any(f => command.StartsWith(f, StringComparison.Ordinal)))
+        {
+            return null;
+        }
+
         if (command.StartsWith("desktop stop", StringComparison.Ordinal))
         {
             DesktopRunning = false;
         }
 
-        return Failing.Any(f => command.StartsWith(f, StringComparison.Ordinal)) ? null : "";
+        return Outputs.FirstOrDefault(o => command.StartsWith(o.Key, StringComparison.Ordinal)).Value ?? "";
     }
 }
 
@@ -284,12 +305,25 @@ internal sealed class FakeWsl(List<string> events) : IWslControl
 {
     public HashSet<string> Running { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    public IReadOnlySet<string> RunningDistros() => Running;
+    /// <summary>Set to make asking WSL what's running fail, as when it hangs.</summary>
+    public bool Unreachable { get; set; }
+
+    /// <summary>Disk files that are open, and ones whose state can't be told.</summary>
+    public HashSet<string> OpenDisks { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public HashSet<string> UnknownDisks { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlySet<string>? RunningDistros() => Unreachable ? null : Running;
+
+    public string? Run(string distro, IReadOnlyList<string> command) => null;
+
+    public bool? DiskInUse(string path) => UnknownDisks.Contains(path) ? null : OpenDisks.Contains(path);
 
     public bool Shutdown()
     {
         events.Add("wsl --shutdown");
         Running.Clear();
+        OpenDisks.Clear();
         return true;
     }
 }
@@ -307,8 +341,12 @@ internal sealed class FakeLauncher(List<string> events) : ICompactorLauncher
 
     public bool HasExited { get; set; }
 
+    /// <summary>Runs when the Compactor is started, to check what's happened by then.</summary>
+    public Action? OnStart { get; set; }
+
     public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
+        OnStart?.Invoke();
         events.Add(Approve ? "admin granted" : "admin refused");
         Started = Approve ? new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun) : null;
         return Approve ? null : "admin permission wasn't given";
@@ -491,6 +529,214 @@ public class CleanupRunTests
         Assert.Equal("Clean up cancelled", result.Title);
     }
 
+    /// <summary>Runs an idle-mode clean up that gets cancelled after <paramref name="checks"/> idle checks.</summary>
+    private async Task<CleanupResult> WaitThenCancel(int checks = 5)
+    {
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        using var cancel = new CancellationTokenSource();
+        return await Run(Request(CompactWhen.WhenIdle, prune: false), cancel, delays =>
+        {
+            if (delays == checks)
+            {
+                cancel.Cancel();
+            }
+        });
+    }
+
+    [Fact]
+    public async Task Keeps_waiting_while_wsl_cant_say_whats_running()
+    {
+        _docker.DesktopRunning = false;
+        _wsl.Unreachable = true;
+
+        var result = await WaitThenCancel();
+
+        Assert.True(result.Cancelled);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.Contains(_progress, p => p.Text.Contains("couldn't check", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Keeps_waiting_while_a_wsl_disk_is_open_even_if_wsl_says_nothing_runs()
+    {
+        _docker.DesktopRunning = false;
+        _wsl.OpenDisks.Add(Ubuntu.Path);
+
+        var result = await WaitThenCancel();
+
+        Assert.True(result.Cancelled);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.Contains(_progress, p => p.Text.Contains("still open", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Keeps_waiting_when_a_disk_cant_be_checked()
+    {
+        _docker.DesktopRunning = false;
+        _wsl.UnknownDisks.Add(Docker.Path);
+
+        Assert.True((await WaitThenCancel()).Cancelled);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+    }
+
+    [Fact]
+    public async Task Watches_every_wsl_disk_not_only_the_ones_being_compacted()
+    {
+        const string other = @"C:\wsl\debian\ext4.vhdx";
+        _docker.DesktopRunning = false;
+        _wsl.OpenDisks.Add(other);
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        using var cancel = new CancellationTokenSource();
+
+        var result = await Run(Request(CompactWhen.WhenIdle, prune: false) with { WslDisks = [other] }, cancel, delays =>
+        {
+            if (delays == 3)
+            {
+                cancel.Cancel();
+            }
+        });
+
+        Assert.True(result.Cancelled);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+    }
+
+    [Fact]
+    public async Task Goes_ahead_once_everything_is_known_to_be_stopped()
+    {
+        _docker.DesktopRunning = false;
+        _wsl.Unreachable = true;
+        _wsl.OpenDisks.Add(Ubuntu.Path);
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _launcher.Final = Done();
+
+        var result = await Run(Request(CompactWhen.WhenIdle, prune: false), onDelay: delays =>
+        {
+            if (delays == 2)
+            {
+                _wsl.Unreachable = false;
+            }
+            else if (delays == 3)
+            {
+                _wsl.OpenDisks.Clear();
+            }
+        });
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(["admin granted", "wsl --shutdown", "signal go"], _events);
+    }
+
+    [Fact]
+    public async Task Counts_dockers_distros_as_docker_running_when_its_status_cant_be_read()
+    {
+        _docker.StatusFails = true;
+        _wsl.Running.Add("docker-desktop");
+
+        Assert.True((await WaitThenCancel()).Cancelled);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.Contains(_progress, p => p.Text == "Compacts once you quit Docker Desktop");
+    }
+
+    [Fact]
+    public async Task Stops_waiting_when_the_compactor_goes_away()
+    {
+        _wsl.Running.Add("Ubuntu");
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+
+        var result = await Run(Request(CompactWhen.WhenIdle, prune: false), onDelay: delays =>
+        {
+            if (delays == 2)
+            {
+                _launcher.HasExited = true;
+                _wsl.Running.Clear();
+                _docker.DesktopRunning = false;
+            }
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("closed before compacting", result.Problem);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+    }
+
+    [Fact]
+    public async Task Shuts_nothing_down_right_away_when_docker_desktops_state_is_unknown()
+    {
+        _docker.StatusFails = true;
+        _wsl.Unreachable = true;
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+
+        var result = await Run(Request());
+
+        Assert.Equal(["admin granted", "signal cancel"], _events);
+        Assert.DoesNotContain(_docker.Calls, c => c.StartsWith("desktop", StringComparison.Ordinal));
+        Assert.Contains("couldn't tell whether Docker Desktop is running", result.Problem);
+        Assert.Equal(17L << 30, result.PrunedBytes);
+    }
+
+    [Fact]
+    public async Task Shuts_nothing_down_when_docker_desktop_doesnt_stop()
+    {
+        _docker.Failing.Add("desktop stop");
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+
+        var result = await Run(Request(prune: false));
+
+        Assert.Equal(["admin granted", "signal cancel"], _events);
+        Assert.Contains("Docker Desktop didn't stop", result.Problem);
+        Assert.DoesNotContain(_docker.Calls, c => c.StartsWith("desktop start", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Doesnt_ask_docker_anything_when_it_isnt_installed()
+    {
+        _docker.Installed = false;
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _launcher.Final = Done();
+
+        var result = await Run(Request(prune: false) with { StartDockerAfter = false });
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(_docker.Calls);
+        Assert.Equal(["admin granted", "wsl --shutdown", "signal go"], _events);
+    }
+
+    [Fact]
+    public async Task Asks_for_admin_before_pruning()
+    {
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _launcher.Final = Done();
+        _launcher.OnStart = () => Assert.Empty(_docker.Calls);
+
+        await Run(Request());
+
+        Assert.Equal(CleanupStep.AskingForAdmin, _progress[0].Step);
+        Assert.Equal(CleanupStep.Pruning, _progress[1].Step);
+    }
+
+    [Fact]
+    public async Task Counts_what_docker_says_it_freed()
+    {
+        _docker.Outputs["builder prune"] = "ID\tRECLAIMABLE\tSIZE\nabc\ttrue\t9GB\nTotal:\t9GB\n";
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _launcher.Final = Done();
+
+        var result = await Run(Request());
+
+        // 9 GB from Docker for the build cache instead of the 12 GiB estimate, plus the two volumes.
+        Assert.Equal(9_000_000_000L + (5L << 30), result.PrunedBytes);
+    }
+
+    [Fact]
+    public void Gives_each_drive_its_own_total()
+    {
+        var onD = Ubuntu with { Path = @"D:\wsl\ubuntu\ext4.vhdx" };
+        var request = Request() with { Disks = [new CompactTarget(Docker, null), new CompactTarget(onD, null)] };
+        var status = new CompactStatus(CompactState.Done, 1, 100, Results: [new DiskResult(Docker.Path, 100L << 30, 20L << 30), new DiskResult(onD.Path, 60L << 30, 35L << 30)]);
+
+        var body = new CleanupResult(request, 0, [], status, null).Body(CultureInfo.InvariantCulture);
+
+        Assert.StartsWith("C: got back 80 GiB · D: got back 25 GiB.\n", body);
+    }
+
     [Fact]
     public async Task Reports_compacting_progress()
     {
@@ -528,6 +774,34 @@ public class CleanupRunTests
 
         Assert.Contains("closed before it started", result.Problem);
         Assert.DoesNotContain("wsl --shutdown", _events);
+    }
+
+    [Fact]
+    public async Task Gives_up_when_the_compactor_never_reports()
+    {
+        var result = await Run(Request(prune: false));
+
+        Assert.Equal("The Compactor didn't start.", result.Problem);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.Empty(_docker.Calls);
+    }
+
+    [Fact]
+    public async Task Says_so_when_the_compactor_ends_without_a_last_status_and_still_starts_docker()
+    {
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Compacting, 0, 10));
+        // Gone after "go", having sent nothing final.
+        var result = await Run(Request(prune: false), onDelay: delays =>
+        {
+            if (_events.Contains("signal go"))
+            {
+                _launcher.HasExited = true;
+            }
+        });
+
+        Assert.Contains("stopped without saying how it went", result.Problem);
+        Assert.Contains("desktop start --detach", _docker.Calls);
     }
 
     [Fact]

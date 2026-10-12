@@ -40,6 +40,27 @@ internal static class StartupRegistration
         }
     }
 
+    /// <summary>
+    /// Points an existing Run entry at this copy when it names another one, keeping whether
+    /// it's switched on. Otherwise Windows would go on starting the old copy.
+    /// </summary>
+    public static void Follow()
+    {
+        try
+        {
+            using var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
+            if (StartupEntry.ShouldFollow(run?.GetValue(ValueName) as string, Command))
+            {
+                Log.Info($"Pointing Start with Windows at {Command} instead of {run!.GetValue(ValueName)}");
+                run.SetValue(ValueName, Command);
+            }
+        }
+        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or System.IO.IOException)
+        {
+            Log.Error("Couldn't update the Run entry", e);
+        }
+    }
+
     /// <summary>Takes DiskTray out of Startup apps entirely, for an uninstall.</summary>
     public static void Remove()
     {

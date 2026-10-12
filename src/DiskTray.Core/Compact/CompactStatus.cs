@@ -38,15 +38,10 @@ public sealed record CompactStatus(
     IReadOnlyList<DiskResult>? Results = null,
     bool DryRun = false)
 {
-    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
-    {
-        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-    };
-
     [JsonIgnore]
     public bool Finished => State is CompactState.Done or CompactState.Failed or CompactState.Cancelled;
 
-    public string ToJson() => JsonSerializer.Serialize(this, Json);
+    public string ToJson() => JsonSerializer.Serialize(this, CompactJson.Default.CompactStatus);
 
     /// <summary>Reads a status, or null if it isn't one.</summary>
     public static CompactStatus? FromJson(string? json)
@@ -58,7 +53,7 @@ public sealed record CompactStatus(
 
         try
         {
-            return JsonSerializer.Deserialize<CompactStatus>(json, Json);
+            return JsonSerializer.Deserialize(json, CompactJson.Default.CompactStatus);
         }
         catch (JsonException)
         {
@@ -66,6 +61,17 @@ public sealed record CompactStatus(
         }
     }
 }
+
+/// <summary>
+/// Writes and reads <see cref="CompactStatus"/> with generated code rather than reflection,
+/// since the Compactor is compiled ahead of time.
+/// </summary>
+[JsonSourceGenerationOptions(JsonSerializerDefaults.Web, Converters = [typeof(CompactStateConverter)])]
+[JsonSerializable(typeof(CompactStatus))]
+internal sealed partial class CompactJson : JsonSerializerContext;
+
+/// <summary>States as "waiting", "compacting" and so on.</summary>
+internal sealed class CompactStateConverter() : JsonStringEnumConverter<CompactState>(JsonNamingPolicy.CamelCase);
 
 /// <summary>What the app tells the Compactor.</summary>
 public enum AppSignal

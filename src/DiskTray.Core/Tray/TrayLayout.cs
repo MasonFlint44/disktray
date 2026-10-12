@@ -103,15 +103,21 @@ public static class TrayLayout
             }
         }
 
-        return items;
+        // Two pins can end up meaning the same thing (the default distro pinned both ways);
+        // only the first gets an icon, since the second would share its key.
+        return items.DistinctBy(i => i.Key, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>
-    /// The disk files that get compacted and count as reclaimable: Docker's data disk and the
-    /// primary distro's, whatever is pinned.
+    /// The disk files that get compacted and count as reclaimable, whatever is pinned:
+    /// Docker's data disk and the primary distro's, and any other distro (not Docker
+    /// Desktop's own) once it's been measured holding space it doesn't use, which is when
+    /// the flyout shows it as reclaimable. Shutting down WSL frees them all at once.
     /// </summary>
     public static IEnumerable<DiskFile> CompactableFiles(DiskSnapshot snapshot) =>
-        new[] { snapshot.Docker, snapshot.PrimaryDistro }.OfType<DiskFile>();
+        snapshot.Files.Where(f => f.Kind == DiskKind.DockerData
+            || f.Id == snapshot.PrimaryDistroId
+            || (f.Kind == DiskKind.WslDistro && !Detection.WslDistro.IsDockerOwnedName(f.Name) && f.ReclaimableBytes > 0));
 
     /// <summary>The pinned files and paths on <paramref name="drive"/>, largest first, which get their own slices of it.</summary>
     public static IReadOnlyList<TrayItem> ItemsOn(IEnumerable<TrayItem> items, DriveSpace drive) =>

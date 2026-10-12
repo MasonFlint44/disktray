@@ -2,6 +2,8 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using DiskTray.Core.Cleanup;
 using DiskTray.Core.Compact;
 
@@ -22,10 +24,15 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
     private Process? _process;
     private CompactStatus? _status;
     private volatile bool _hungUp;
+    private volatile bool _connected;
 
     public static string ExePath { get; } = Path.Combine(AppContext.BaseDirectory, "DiskTray.Compactor.exe");
 
-    public bool HasExited => _hungUp || _process is null || HasProcessExited(_process);
+    /// <summary>
+    /// Once it has connected, only the pipe closing counts, so a status it sent just before
+    /// exiting has been read by then. Before that, the process ending does.
+    /// </summary>
+    public bool HasExited => _hungUp || _process is null || (!_connected && HasProcessExited(_process));
 
     public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
@@ -33,6 +40,13 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         {
             Log.Info($"Can't compact: {ExePath} is missing");
             return "DiskTray.Compactor.exe is missing";
+        }
+
+        // Checked here too, so a bad path gets a reason rather than a Compactor that quits.
+        if (disks.FirstOrDefault(d => !CompactorArgs.IsVhdx(d)) is { } bad)
+        {
+            Log.Info($"Can't compact {bad}: not a full local .vhdx path");
+            return $"{bad} isn't a disk file DiskTray can compact";
         }
 
         // Before the admin prompt, so a Compactor something else could have swapped never gets it.
@@ -44,8 +58,11 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
 
         var args = new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun);
 
-        // Created before the Compactor starts, and only once, so nothing else can be on this name.
-        _pipe = new NamedPipeServerStream(args.Pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance);
+        // Created before the Compactor starts, and only once, so nothing else can be on this
+        // name; and only this user and admins (the Compactor may run as a separate admin
+        // account) can connect, never over the network.
+        _pipe = NamedPipeServerStreamAcl.Create(
+            args.Pipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, 0, 0, PipeAccess());
         var start = new ProcessStartInfo(ExePath)
         {
             UseShellExecute = true,
@@ -131,6 +148,8 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
                 _writer = new StreamWriter(pipe) { AutoFlush = true, NewLine = "\n" };
             }
 
+            _connected = true;
+
             using var reader = new StreamReader(pipe);
             while (await reader.ReadLineAsync() is { } line)
             {
@@ -156,10 +175,25 @@ internal sealed class CompactorLauncher : ICompactorLauncher, IDisposable
         {
             Log.Error("Lost the pipe to the Compactor", e);
         }
+        catch (ObjectDisposedException)
+        {
+            // Closed from this side, when the run gave up on it.
+            Log.Info("Closed the pipe to the Compactor");
+        }
         finally
         {
             _hungUp = true;
         }
+    }
+
+    private static PipeSecurity PipeAccess()
+    {
+        using var me = WindowsIdentity.GetCurrent();
+        var security = new PipeSecurity();
+        security.AddAccessRule(new PipeAccessRule(me.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+        return security;
     }
 
     private void Close()

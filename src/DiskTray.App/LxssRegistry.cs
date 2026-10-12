@@ -30,7 +30,7 @@ internal sealed class LxssRegistry : IWslRegistry
                 key.GetValue("DistributionName") as string,
                 key.GetValue("BasePath") as string,
                 key.GetValue("VhdFileName") as string,
-                key.GetValue("Version") is int version ? version : 2));
+                key.GetValue("Flags") as int?));
         }
 
         return new WslRegistryData(entries, lxss.GetValue("DefaultDistribution") as string);

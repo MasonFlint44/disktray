@@ -35,6 +35,7 @@ internal sealed class TrayController : IDisposable
     private readonly Dictionary<string, TaskbarIcon> _icons = [];
     private readonly Dictionary<string, System.Drawing.Icon> _images = [];
     private bool _refreshing;
+    private bool _refreshAgain;
     private DiskSnapshot? _snapshot;
     private FlyoutWindow? _flyout;
     private SettingsWindow? _settingsWindow;
@@ -59,6 +60,8 @@ internal sealed class TrayController : IDisposable
         _reminderTimer.Tick += (_, _) => CheckAlerts(UserIsActive());
         ApplicationThemeManager.Changed += OnThemeChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
+        // A new taskbar scale means new icon sizes, without waiting for the next refresh.
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         Notifier.Clicked += OnNotificationClicked;
         _largeFiles = new LargeFileScanner(settings.LargeFileScan, settings.LargeFileMinBytes);
         _largeFiles.Changed += (_, _) => Application.Current?.Dispatcher.BeginInvoke(() =>
@@ -78,31 +81,49 @@ internal sealed class TrayController : IDisposable
         await RefreshAsync();
         _timer.Start();
         _reminderTimer.Start();
+        if (await InterruptedCleanup.FinishAsync(_docker, _wsl) is { } finished)
+        {
+            Notifier.ShowCleanup("Clean up didn't finish", finished);
+        }
     }
 
+    /// <summary>
+    /// Measures and redraws. Asked again while it's going (new settings, a folder count
+    /// finishing), it goes round once more afterwards, since this round may have started
+    /// with the old pins.
+    /// </summary>
     public async Task RefreshAsync()
     {
         if (_refreshing)
         {
+            _refreshAgain = true;
             return;
         }
 
         _refreshing = true;
         try
         {
-            var pins = _settings.Pins;
-            var detect = new DetectionOptions(_settings.DetectDistros, _settings.DetectDocker);
-            _snapshot = await Task.Run(() => _monitor.Measure(pins, detect));
-            _problem = null;
-            Redraw();
-            CheckAlerts(UserIsActive());
-        }
-        catch (Exception e)
-        {
-            // Keep whatever the icons showed last, and say why they're stale.
-            Log.Error("Refresh failed", e);
-            _problem = $"Couldn't refresh: {e.Message}";
-            Redraw();
+            do
+            {
+                _refreshAgain = false;
+                try
+                {
+                    var pins = _settings.Pins;
+                    var detect = new DetectionOptions(_settings.DetectDistros, _settings.DetectDocker);
+                    _snapshot = await Task.Run(() => _monitor.Measure(pins, detect));
+                    _problem = null;
+                    Redraw();
+                    CheckAlerts(UserIsActive());
+                }
+                catch (Exception e)
+                {
+                    // Keep whatever the icons showed last, and say why they're stale.
+                    Log.Error("Refresh failed", e);
+                    _problem = $"Couldn't refresh: {e.Message}";
+                    Redraw();
+                }
+            }
+            while (_refreshAgain);
         }
         finally
         {
@@ -117,6 +138,7 @@ internal sealed class TrayController : IDisposable
         _largeFiles.Dispose();
         ApplicationThemeManager.Changed -= OnThemeChanged;
         SystemEvents.SessionSwitch -= OnSessionSwitch;
+        SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         Notifier.Clicked -= OnNotificationClicked;
         _flyout?.Close();
         _settingsWindow?.Close();
@@ -324,9 +346,16 @@ internal sealed class TrayController : IDisposable
         using var launcher = new CompactorLauncher();
         _cleanupCancel = new CancellationTokenSource();
         bool toldCompacting = false;
-        var progress = new Progress<CleanupProgress>(p =>
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var progress = new RunProgress<CleanupProgress>(action => dispatcher.BeginInvoke(action), p =>
         {
             _cleanupProgress = p;
+            if (p.Step is CleanupStep.StoppingDocker or CleanupStep.ShuttingDownWsl && !request.DryRun)
+            {
+                // From here on, exiting would leave Docker stopped; the next start finishes up.
+                InterruptedCleanup.Save(request.StartDockerAfter);
+            }
+
             if (p.Step == CleanupStep.Compacting && !toldCompacting)
             {
                 toldCompacting = true;
@@ -354,6 +383,8 @@ internal sealed class TrayController : IDisposable
         }
         finally
         {
+            progress.Done();
+            InterruptedCleanup.Clear();
             _cleanupProgress = null;
             _cleanupCancel.Dispose();
             _cleanupCancel = null;
@@ -415,6 +446,26 @@ internal sealed class TrayController : IDisposable
     }
 
     // The donut's gray slices differ between light and dark.
+    // Raised on SystemEvents' own thread.
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) => _timer.Dispatcher.BeginInvoke(Redraw);
+
+    /// <summary>
+    /// After an error nothing else caught, which may have left the icons or flyout stale,
+    /// say so in the flyout until the next refresh succeeds.
+    /// </summary>
+    public void ShowUnexpectedError()
+    {
+        _problem = "Something went wrong. See the log for details.";
+        try
+        {
+            Redraw();
+        }
+        catch (Exception e)
+        {
+            Log.Error("Couldn't redraw after an error", e);
+        }
+    }
+
     private void OnThemeChanged(ApplicationTheme theme, System.Windows.Media.Color accent)
     {
         if (_flyout?.IsVisible == true)
@@ -475,8 +526,36 @@ internal sealed class TrayController : IDisposable
         var settings = new MenuItem { Header = "Settings…" };
         settings.Click += (_, _) => OpenSettings();
         var exit = new MenuItem { Header = "Exit" };
-        exit.Click += (_, _) => Application.Current.Shutdown();
+        exit.Click += async (_, _) =>
+        {
+            if (await ConfirmExitAsync())
+            {
+                Application.Current.Shutdown();
+            }
+        };
         return new ContextMenu { Items = { refresh, cleanup, settings, new Separator(), exit } };
+    }
+
+    /// <summary>
+    /// Exiting while a clean up waits for WSL to go idle just cancels it, but once it has
+    /// stopped Docker or started compacting, it's worth a question.
+    /// </summary>
+    private async Task<bool> ConfirmExitAsync()
+    {
+        if (_cleanupProgress is null or { CanCancel: true })
+        {
+            return true;
+        }
+
+        var ask = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Exit DiskTray?",
+            Content = "A clean up is running. Compacting carries on without DiskTray, but you won't hear how it went. "
+                + "Next time DiskTray starts, it starts Docker Desktop again if the clean up was going to.",
+            PrimaryButtonText = "Exit",
+            CloseButtonText = "Keep running",
+        };
+        return await ask.ShowDialogAsync() == Wpf.Ui.Controls.MessageBoxResult.Primary;
     }
 
     /// <summary>

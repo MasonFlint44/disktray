@@ -66,7 +66,8 @@ public sealed record TrayPin(PinKind Kind, string? Target = null, string? Name =
         foreach (var pin in pins ?? [])
         {
             if (pin is null || !Enum.IsDefined(pin.Kind) || kept.Any(pin.SameItem)
-                || (pin.Kind == PinKind.Path && string.IsNullOrWhiteSpace(pin.Target)))
+                || (pin.Kind == PinKind.Path && string.IsNullOrWhiteSpace(pin.Target))
+                || (pin.Kind is PinKind.Path or PinKind.Drive && !string.IsNullOrWhiteSpace(pin.Target) && !IsLocalPath(pin.Target)))
             {
                 continue;
             }
@@ -91,6 +92,15 @@ public sealed record TrayPin(PinKind Kind, string? Target = null, string? Name =
 
         return kept.Count > 0 ? kept : Defaults;
     }
+
+    /// <summary>
+    /// Whether a file, folder or drive can be pinned: a path on a drive letter, like
+    /// <c>D:\VMs</c>. Not <c>\\wsl.localhost\…</c>, which would start WSL on every refresh
+    /// (and keep it from ever going idle for a compact), nor a network share, which could
+    /// hold up every refresh. A mapped network drive passes this; the pickers refuse those.
+    /// </summary>
+    public static bool IsLocalPath(string path) =>
+        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == '\\';
 
     public static bool IsColor(string text)
     {

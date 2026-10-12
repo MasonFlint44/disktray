@@ -4,7 +4,14 @@ namespace DiskTray.Core.Detection;
 /// One distro key under <c>HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss</c>.
 /// <paramref name="Id"/> is the key name, a GUID in braces.
 /// </summary>
-public sealed record WslRegistryEntry(string Id, string? DistributionName, string? BasePath, string? VhdFileName, int Version);
+/// <param name="Flags">The key's Flags value, null if it has none. <see cref="VmModeFlag"/> marks WSL 2.</param>
+public sealed record WslRegistryEntry(string Id, string? DistributionName, string? BasePath, string? VhdFileName, int? Flags)
+{
+    /// <summary>Set in Flags for a WSL 2 distro, which runs in the VM and has a disk file.</summary>
+    public const int VmModeFlag = 0x8;
+
+    public bool IsWsl2 => Flags is not { } flags || (flags & VmModeFlag) != 0;
+}
 
 public sealed record WslRegistryData(IReadOnlyList<WslRegistryEntry> Entries, string? DefaultDistributionId)
 {
@@ -33,7 +40,7 @@ public static class WslDistros
     public static IReadOnlyList<WslDistro> FromRegistry(WslRegistryData data) =>
         data.Entries
             // WSL 1 distros live in a plain folder, not a disk file.
-            .Where(e => e.Version != 1
+            .Where(e => e.IsWsl2
                 && !string.IsNullOrWhiteSpace(e.DistributionName)
                 && !string.IsNullOrWhiteSpace(e.BasePath))
             .Select(e => new WslDistro(

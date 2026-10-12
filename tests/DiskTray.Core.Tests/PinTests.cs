@@ -209,4 +209,33 @@ public class PinnedItemTests
     [Fact]
     public void Clean_up_still_compacts_docker_and_the_main_distro_whatever_is_pinned() =>
         Assert.Equal(["docker", Machine.UbuntuId], TrayLayout.CompactableFiles(Machine.Scan()).Select(f => f.Id));
+
+    [Fact]
+    public void Clean_up_also_compacts_another_distro_once_its_shown_as_reclaimable()
+    {
+        var snapshot = Machine.Scan();
+        snapshot = snapshot with { Files = snapshot.Files.Select(f => f.Name == "wsl-vpnkit" ? f with { UsedBytes = f.SizeBytes / 2 } : f).ToList() };
+
+        Assert.Equal(["docker", Machine.UbuntuId, "{11111111-0000-0000-0000-000000000000}"], TrayLayout.CompactableFiles(snapshot).Select(f => f.Id));
+    }
+
+    [Fact]
+    public void Gives_two_pins_for_the_same_distro_one_icon()
+    {
+        var items = TrayLayout.Resolve(Machine.Scan(), [new TrayPin(PinKind.Distro), new TrayPin(PinKind.Distro, Machine.UbuntuId, "Again")]);
+
+        Assert.Equal(Machine.UbuntuId, Assert.Single(items).Key);
+    }
+
+    [Theory]
+    [InlineData(@"\\wsl.localhost\Ubuntu\home\me")]
+    [InlineData(@"\\server\share\big.iso")]
+    [InlineData(@"\\?\C:\VMs")]
+    [InlineData("relative\\path")]
+    public void Drops_pins_outside_this_pcs_drives(string path) =>
+        Assert.Equal(TrayPin.Defaults, TrayPin.Clean([new TrayPin(PinKind.Path, path)]));
+
+    [Fact]
+    public void Keeps_pins_on_a_drive_letter() =>
+        Assert.Equal(@"D:\VMs", Assert.Single(TrayPin.Clean([new TrayPin(PinKind.Path, @"D:\VMs")])).Target);
 }

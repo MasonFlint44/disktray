@@ -8,6 +8,13 @@ public sealed record ProjectFolder(string? Distro, string Path)
 {
     private const string BindMountsPrefix = "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/";
 
+    /// <summary>
+    /// The distro was assumed, not recorded: Compose's working folder doesn't say which
+    /// distro it's in. Then the folder not being there doesn't mean it's gone, since it may
+    /// be in another distro. Not part of equality.
+    /// </summary>
+    public bool DistroGuessed { get; init; }
+
     /// <summary>The last part of the path, e.g. <c>web-app</c>.</summary>
     public string Name => Path.TrimEnd('/', '\\').Split('/', '\\')[^1];
 

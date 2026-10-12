@@ -14,6 +14,20 @@ internal static class HiddenProcess
         TimeSpan timeout,
         IReadOnlyDictionary<string, string>? environment = null)
     {
+        var result = RunToEnd(exe, args, timeout, environment);
+        return (result.ExitCode == 0 ? result.Output : null, result.Failure);
+    }
+
+    /// <summary>
+    /// Like <see cref="Run"/>, but also gives the exit code and the output of a non-zero
+    /// exit. ExitCode is null when it timed out or didn't start.
+    /// </summary>
+    public static (string? Output, string? Failure, int? ExitCode) RunToEnd(
+        string exe,
+        IReadOnlyList<string> args,
+        TimeSpan timeout,
+        IReadOnlyDictionary<string, string>? environment = null)
+    {
         var start = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
@@ -43,16 +57,16 @@ internal static class HiddenProcess
             if (!process.WaitForExit(timeout) || !Task.WaitAll([output, error], timeout))
             {
                 process.Kill(entireProcessTree: true);
-                return (null, $"timed out after {timeout.TotalSeconds:0} s");
+                return (null, $"timed out after {timeout.TotalSeconds:0} s", null);
             }
 
             return process.ExitCode == 0
-                ? (output.Result, null)
-                : (null, $"exited with {process.ExitCode}: {(error.Result + output.Result).Trim()}");
+                ? (output.Result, null, 0)
+                : (error.Result + output.Result, $"exited with {process.ExitCode}: {(error.Result + output.Result).Trim()}", process.ExitCode);
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
-            return (null, e.Message);
+            return (null, e.Message, null);
         }
     }
 }

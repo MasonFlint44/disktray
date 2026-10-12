@@ -116,6 +116,11 @@ internal sealed class FolderSizer : IFolderSizes, IDisposable
                 Measured?.Invoke(this, EventArgs.Empty);
             }
         }
+        catch (Exception e)
+        {
+            // On a timer thread, where anything not caught would end the app.
+            Log.Error("Folder sizing failed", e);
+        }
         finally
         {
             Interlocked.Exchange(ref _running, 0);

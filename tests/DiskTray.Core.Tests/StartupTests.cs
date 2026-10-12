@@ -26,3 +26,17 @@ public class StartupApprovalTests
         Assert.Equal(at, DateTimeOffset.FromFileTime(BitConverter.ToInt64(disabled, 4)));
     }
 }
+
+public class StartupEntryTests
+{
+    private const string Installed = "\"C:\\Program Files\\DiskTray\\DiskTray.exe\"";
+
+    [Theory]
+    [InlineData("\"C:\\Users\\me\\AppData\\Local\\Programs\\DiskTray\\DiskTray.exe\"", true)]
+    [InlineData("\"c:\\program files\\disktray\\disktray.exe\"", false)]
+    [InlineData(Installed, false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void Follows_this_copy_only_when_the_entry_names_another(string? current, bool follow) =>
+        Assert.Equal(follow, StartupEntry.ShouldFollow(current, Installed));
+}

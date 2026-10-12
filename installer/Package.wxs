@@ -1,8 +1,13 @@
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   <!-- Never change the UpgradeCode: it's how a new version finds and replaces the old one. -->
   <Package Name="DiskTray" Manufacturer="DiskTray" Version="$(Version)" Scope="perMachine"
            UpgradeCode="e048c4d3-96be-41df-9c0a-9ae7059d2735">
-    <MajorUpgrade DowngradeErrorMessage="A newer version of DiskTray is already installed." />
+    <!-- Same-version upgrades too, so a rebuilt MSI replaces the installed one rather than
+         installing beside it. -->
+    <!-- The old version comes out inside this install's own script, after other users'
+         copies have been closed (CloseOtherSessions), so its files aren't in use. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+                  DowngradeErrorMessage="A newer version of DiskTray is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Settings › Apps: the icon, and only Uninstall (there's nothing to change or repair). -->
@@ -35,6 +40,12 @@
       <ComponentGroupRef Id="AppFiles" />
     </Feature>
 
+    <!-- DiskTray running for other signed-in users, on an upgrade or uninstall: asked to
+         close, then ended if it hasn't. Runs as admin, so it reaches every session. The
+         installing user's own copy has been closed cleanly by then (CloseDiskTray). -->
+    <util:CloseApplication Id="CloseOtherSessions" Target="DiskTray.exe" ElevatedCloseMessage="yes" ElevatedEndSessionMessage="yes"
+                           TerminateProcess="1" Timeout="15" RebootPrompt="no" Condition="Installed OR WIX_UPGRADE_DETECTED" />
+
     <!-- These run as the user doing the install, without admin rights, in their session. -->
 
     <!-- On an uninstall (not an upgrade): close DiskTray and remove the user's settings,
@@ -44,8 +55,12 @@
     <!-- On an upgrade or a repair: close the running copy so its files can be replaced. -->
     <CustomAction Id="CloseDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
                   ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --exit" />
-    <!-- After installing, start it the way Explorer does, so it never runs as admin even
-         when the install did. Skipped for silent installs, which have no one signed in to see it. -->
+    <!-- After installing: close whatever copy is still running, wherever it's from (a copy
+         that was never installed, say), so the new one doesn't find it and quit. -->
+    <CustomAction Id="CloseAnyCopy" Directory="INSTALLFOLDER" Execute="immediate" Return="ignore"
+                  ExeCommand="&quot;[INSTALLFOLDER]DiskTray.exe&quot; --exit" />
+    <!-- Then start it the way Explorer does, so it never runs as admin even when the install
+         did. Skipped for silent installs, which have no one signed in to see it. -->
     <CustomAction Id="StartDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
                   ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
 
@@ -54,8 +69,12 @@
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="CloseDiskTray" After="RemoveUserData"
               Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot;" />
-      <Custom Action="StartDiskTray" After="InstallFinalize"
-              Condition="NOT Installed AND UILevel &gt; 2" />
+      <!-- As early as admin actions can be queued: before the old version or any file is removed. -->
+      <Custom Action="override Wix4CloseApplications_X64" Before="RemoveExistingProducts" />
+      <Custom Action="CloseAnyCopy" After="InstallFinalize"
+              Condition="NOT REMOVE~=&quot;ALL&quot;" />
+      <Custom Action="StartDiskTray" After="CloseAnyCopy"
+              Condition="NOT REMOVE~=&quot;ALL&quot; AND UILevel &gt; 2" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

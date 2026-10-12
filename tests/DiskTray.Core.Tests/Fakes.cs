@@ -43,7 +43,10 @@ internal sealed class FakeWslCommands : IWslCommands
 
     public List<string> Calls { get; } = [];
 
-    public IReadOnlySet<string> RunningDistros() => Running;
+    /// <summary>Set to make asking WSL what's running fail.</summary>
+    public bool Unreachable { get; set; }
+
+    public IReadOnlySet<string>? RunningDistros() => Unreachable ? null : Running;
 
     public string? Run(string distro, IReadOnlyList<string> command)
     {
@@ -76,9 +79,9 @@ internal static class Machine
 
     public static WslRegistryData Registry() => new(
         [
-            new(UbuntuId, "Ubuntu", UbuntuBase, null, 2),
-            new("{11111111-0000-0000-0000-000000000000}", "wsl-vpnkit", @"\\?\C:\Users\me\wsl-vpnkit", null, 2),
-            new("{22222222-0000-0000-0000-000000000000}", "docker-desktop", @"\\?\C:\Users\me\AppData\Local\Docker\wsl\main", "ext4.vhdx", 2),
+            new(UbuntuId, "Ubuntu", UbuntuBase, null, 0xf),
+            new("{11111111-0000-0000-0000-000000000000}", "wsl-vpnkit", @"\\?\C:\Users\me\wsl-vpnkit", null, 0xf),
+            new("{22222222-0000-0000-0000-000000000000}", "docker-desktop", @"\\?\C:\Users\me\AppData\Local\Docker\wsl\main", "ext4.vhdx", 0xf),
         ],
         UbuntuId);
 

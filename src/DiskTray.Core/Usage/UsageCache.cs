@@ -20,11 +20,18 @@ public sealed class UsageCache
 
     public void Set(string path, UsageReading reading) => _readings[path] = reading;
 
-    /// <summary>Forgets disk files that no longer exist.</summary>
-    public void RetainOnly(IEnumerable<string> paths)
+    /// <summary>How long a reading for a disk file that's no longer seen is kept, in case it comes back.</summary>
+    public static readonly TimeSpan ForgetAfter = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// Forgets disk files that haven't been seen for <see cref="ForgetAfter"/>. Not at once,
+    /// since one can be missing for a while: Docker or WSL detection switched off, or a
+    /// distro moved.
+    /// </summary>
+    public void RetainOnly(IEnumerable<string> paths, DateTimeOffset now)
     {
         var keep = paths.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (string path in _readings.Keys.Where(p => !keep.Contains(p)).ToList())
+        foreach (string path in _readings.Where(r => !keep.Contains(r.Key) && now - r.Value.MeasuredAt >= ForgetAfter).Select(r => r.Key).ToList())
         {
             _readings.Remove(path);
         }

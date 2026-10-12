@@ -112,8 +112,9 @@ internal sealed class LargeFileScanner : IDisposable
             AppDataFile.Write(FileName, Last.ToJson());
             Log.Info($"Large-file scan found {found.Count} files over {minBytes >> 30} GiB in {DateTimeOffset.Now - started:mm\\:ss}");
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        catch (Exception e)
         {
+            // On a timer thread, where anything not caught would end the app.
             Log.Error("Large-file scan failed", e);
         }
         finally

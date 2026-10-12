@@ -153,10 +153,53 @@ public class DockerOutputTests
 
     [Theory]
     [InlineData("""{"SessionID":"x","Status":"running"}""", true)]
+    [InlineData("""{"Status":"starting"}""", true)]
+    [InlineData("""{"Status":"paused"}""", true)]
     [InlineData("""{"Status":"stopped"}""", false)]
-    [InlineData("error during connect", false)]
-    public void Reads_docker_desktop_status(string output, bool running) =>
-        Assert.Equal(running, DockerOutput.ParseDesktopRunning(output));
+    [InlineData("""{"Status":""}""", null)]
+    [InlineData("""{}""", null)]
+    [InlineData("error during connect", null)]
+    public void Reads_docker_desktop_status(string output, bool? running) =>
+        Assert.Equal(running, DockerOutput.ParseDesktopStatus(output));
+
+    [Fact]
+    public void Docker_desktop_isnt_running_when_it_isnt_installed() =>
+        Assert.False(DockerOutput.DesktopRunning(installed: false, null, null));
+
+    [Theory]
+    [InlineData("""{"Status":"running"}""", null, true)]
+    [InlineData("""{"Status":"stopped"}""", "docker-desktop", false)]
+    // The status can't be read: Docker's own distros running says it is.
+    [InlineData(null, "docker-desktop,Ubuntu", true)]
+    [InlineData(null, "Ubuntu", false)]
+    [InlineData("not json", "", false)]
+    public void Falls_back_to_dockers_distros_when_its_status_cant_be_read(string? status, string? distros, bool running) =>
+        Assert.Equal(running, DockerOutput.DesktopRunning(true, status, distros?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToHashSet()));
+
+    [Fact]
+    public void Doesnt_know_whether_docker_desktop_runs_when_nothing_answers() =>
+        Assert.Null(DockerOutput.DesktopRunning(true, null, null));
+
+    [Theory]
+    [InlineData("Deleted Images:\ndeleted: sha256:abc\n\nTotal reclaimed space: 1.5GB\n", 1_500_000_000L)]
+    [InlineData("ID\tRECLAIMABLE\tSIZE\nabc\ttrue\t2MB\nTotal:\t3.2GB\n", 3_200_000_000L)]
+    [InlineData("Total reclaimed space: 0B", 0L)]
+    [InlineData("acme_sqlserver\n", null)]
+    public void Reads_what_a_prune_freed(string output, long? bytes) =>
+        Assert.Equal(bytes, DockerOutput.ParseReclaimed(output));
+
+    [Fact]
+    public void Reads_links_and_flags_that_arent_quoted()
+    {
+        var usage = DockerOutput.ParseDiskUsage("""
+            {"BuildCache":[{"InUse":false,"Shared":false,"Size":"1GB"}],
+             "Images":[],
+             "Volumes":[{"Name":"a","Links":0,"Size":"2GB","Labels":""},{"Name":"b","Links":1,"Size":"3GB","Labels":""}]}
+            """);
+
+        Assert.Equal(1_000_000_000L, usage!.BuildCacheBytes);
+        Assert.Equal(["a"], usage.UnusedVolumes.Select(v => v.Name));
+    }
 
     [Fact]
     public void Removes_only_the_volumes_named() =>
@@ -305,6 +348,60 @@ public class VolumeConfidenceTests
         Assert.Equal(FolderCheck.Exists, Group(folders).Single(g => g.Project == "acmeweb-app_devcontainer").Check);
     }
 
+    /// <summary>A Compose project run in some distro with only named volumes, so nothing says which distro.</summary>
+    private static readonly IReadOnlyList<DockerContainer> Postgres = DockerOutput.ParseContainers("""
+        [{"Name":"/pg-db-1","State":{"Status":"exited"},
+          "Config":{"Labels":{"com.docker.compose.project":"pg","com.docker.compose.project.working_dir":"/home/me/pg"}},
+          "Mounts":[{"Type":"volume","Name":"pg_data","Source":"/var/lib/docker/volumes/pg_data/_data"}]}]
+        """);
+
+    [Fact]
+    public void Marks_a_folder_whose_distro_was_assumed()
+    {
+        var folders = VolumeConfidence.FoldersFromContainers([.. Containers, .. Postgres], "Ubuntu");
+
+        Assert.True(folders["pg"].DistroGuessed);
+        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/pg"), folders["pg"]);
+        Assert.False(folders["scratch"].DistroGuessed);
+        Assert.False(folders["billing-api_devcontainer"].DistroGuessed);
+    }
+
+    [Fact]
+    public void Never_pre_selects_a_project_whose_distro_was_assumed()
+    {
+        // The project lives in Debian; Ubuntu, the default, is running and has no such folder.
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var groups = VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), new ProjectFolderCache(), [], Folders());
+
+        Assert.Equal(FolderCheck.NotChecked, Assert.Single(groups).Check);
+        Assert.False(groups[0].PreSelected);
+    }
+
+    [Fact]
+    public void Still_finds_an_assumed_folder_that_is_there()
+    {
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var folders = Folders();
+        folders.Existing.Add("Ubuntu:/home/me/pg");
+
+        var groups = VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), new ProjectFolderCache(), [], folders);
+
+        Assert.Equal(FolderCheck.Exists, Assert.Single(groups).Check);
+    }
+
+    [Fact]
+    public void Prefers_a_remembered_recorded_folder_over_an_assumed_one_from_now()
+    {
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/old/pg") }, DateTimeOffset.UnixEpoch);
+
+        var group = Assert.Single(VolumeConfidence.Group(unused, VolumeConfidence.FoldersFromContainers(Postgres, "Ubuntu"), cache, [], Folders()));
+
+        Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/old/pg"), group.Folder);
+        Assert.Equal(FolderCheck.Deleted, group.Check);
+    }
+
     [Theory]
     [InlineData("acme.web-app", "acmeweb-app")]
     [InlineData("My Project!", "myproject")]
@@ -326,6 +423,40 @@ public class ProjectFolderCacheTests
 
         Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/app"), copy.Get("app"));
         Assert.Null(copy.Get("other"));
+    }
+
+    [Fact]
+    public void Never_lets_an_assumed_distro_replace_a_recorded_one()
+    {
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Debian", "/home/me/pg") }, DateTimeOffset.UnixEpoch);
+
+        Assert.False(cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new ProjectFolder("Ubuntu", "/home/me/pg") { DistroGuessed = true } }, DateTimeOffset.UnixEpoch));
+        Assert.Equal(new ProjectFolder("Debian", "/home/me/pg"), cache.Get("pg"));
+    }
+
+    [Fact]
+    public void Lets_a_recorded_distro_replace_an_assumed_one_and_remembers_which_is_which()
+    {
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new ProjectFolder("Ubuntu", "/home/me/pg") { DistroGuessed = true } }, DateTimeOffset.UnixEpoch);
+        Assert.True(ProjectFolderCache.FromJson(cache.ToJson()).Get("pg")!.DistroGuessed);
+
+        // Same folder, but now a bind mount says the distro.
+        Assert.True(cache.Record(new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/pg") }, DateTimeOffset.UnixEpoch));
+        Assert.False(ProjectFolderCache.FromJson(cache.ToJson()).Get("pg")!.DistroGuessed);
+    }
+
+    [Fact]
+    public void Treats_distros_saved_before_guesses_were_marked_as_assumed()
+    {
+        var cache = ProjectFolderCache.FromJson("""
+            {"pg":{"distro":"Ubuntu","path":"/home/me/pg","seenAt":"2026-10-01T00:00:00+00:00"},
+             "win":{"distro":null,"path":"C:\\code\\win","seenAt":"2026-10-01T00:00:00+00:00"}}
+            """);
+
+        Assert.True(cache.Get("pg")!.DistroGuessed);
+        Assert.False(cache.Get("win")!.DistroGuessed);
     }
 
     [Theory]
@@ -386,8 +517,17 @@ public class CleanupLayoutTests
         Assert.True(choices.Compact);
         Assert.Equal(CompactWhen.WhenIdle, choices.When);
         Assert.Equal(["acme_sqlserver", "acme_vscode"], choices.Volumes.Order());
-        Assert.True(choices.StartDockerAfter);
+        // Compacting when idle: the user quits Docker, so it isn't started again unasked.
+        Assert.False(choices.StartDockerAfter);
     }
+
+    [Theory]
+    [InlineData(CompactWhen.RightAway, true, true, true)]
+    [InlineData(CompactWhen.WhenIdle, true, true, false)]
+    [InlineData(CompactWhen.RightAway, false, true, false)]
+    [InlineData(CompactWhen.RightAway, true, false, false)]
+    public void Starts_docker_again_by_default_only_after_stopping_it_itself(CompactWhen when, bool setting, bool dockerRunning, bool expected) =>
+        Assert.Equal(expected, CleanupChoices.StartDockerDefault(State(dockerRunning), new CleanupDefaults(StartDockerAfter: setting), when));
 
     [Fact]
     public void Starts_with_what_settings_say()
@@ -448,7 +588,18 @@ public class CleanupLayoutTests
         var model = Build(State(), c => c with { BuildCache = false, Volumes = new HashSet<string> { "notes_conda" } });
 
         Assert.Equal("1 volume 1.0 GiB", model.PruneDetail);
-        Assert.Equal(1L << 30, model.PruneBytes);
+        Assert.Equal("1.0 GiB", model.PruneTotal);
+    }
+
+    [Fact]
+    public void Never_expects_a_disk_to_end_up_below_nothing()
+    {
+        var docker = State().Snapshot.Docker!;
+
+        // Pruning more than the disk says it uses (the estimates are rough) leaves it at zero.
+        var target = CleanupLayout.Targets(State().Snapshot, docker.UsedBytes!.Value + (10L << 30)).Single(t => t.File.Kind == DiskKind.DockerData);
+
+        Assert.Equal(0, target.AfterBytes);
     }
 
     [Fact]
@@ -477,6 +628,25 @@ public class CleanupLayoutTests
                 "Unsaved work in them is lost.",
             ],
             model.Warning);
+    }
+
+    [Fact]
+    public void Says_when_it_couldnt_tell_whats_running()
+    {
+        var model = Build(State(false) with { RunningKnown = false }, c => c with { When = CompactWhen.RightAway });
+
+        Assert.Contains("couldn't tell what's running", Assert.Single(model.Warning));
+    }
+
+    [Fact]
+    public void Knows_docker_desktop_runs_even_when_it_didnt_say_what_to_prune()
+    {
+        var state = State(false) with { DesktopRunning = true };
+        var model = Build(state, c => c with { When = CompactWhen.RightAway });
+
+        Assert.Contains("didn't say what can be pruned", model.PruneUnavailable);
+        Assert.Contains(model.Warning, w => w.StartsWith("Docker Desktop", StringComparison.Ordinal));
+        Assert.True(CleanupChoices.Defaults(state, new CleanupDefaults(When: CompactWhen.RightAway)).StartDockerAfter);
     }
 
     [Fact]
@@ -534,4 +704,81 @@ public class CleanupLayoutTests
     [InlineData("vscode", null, "vscode")]
     public void Shortens_volume_names(string name, string? project, string label) =>
         Assert.Equal(label, CleanupLayout.VolumeLabel(new DockerVolume(name, 0, project)));
+}
+
+public class RunProgressTests
+{
+    [Fact]
+    public void Drops_reports_still_queued_when_the_run_finishes()
+    {
+        var queued = new Queue<Action>();
+        var seen = new List<string>();
+        var progress = new RunProgress<string>(queued.Enqueue, seen.Add);
+
+        progress.Report("pruning");
+        queued.Dequeue()();
+        // The run reports one last step and returns before the UI thread gets to it.
+        progress.Report("waiting for admin");
+        progress.Done();
+        while (queued.Count > 0)
+        {
+            queued.Dequeue()();
+        }
+
+        Assert.Equal(["pruning"], seen);
+    }
+}
+
+public sealed class FolderLookupTests : IDisposable
+{
+    private readonly string _root = Directory.CreateTempSubdirectory("disktray-folders-").FullName;
+
+    public void Dispose() => Directory.Delete(_root, recursive: true);
+
+    /// <summary>Looks at folders in the running distro "Ubuntu" under a temp folder standing in for \\wsl.localhost.</summary>
+    private FolderLookup Lookup(params string[] running) =>
+        new(running.ToHashSet(StringComparer.OrdinalIgnoreCase), (distro, path) => Path.Combine(_root, distro) + path);
+
+    private void Make(string path) => Directory.CreateDirectory(Path.Combine(_root, "Ubuntu") + path);
+
+    [Fact]
+    public void Finds_a_folder_that_is_there()
+    {
+        Make("/home/me/app");
+
+        Assert.True(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
+    }
+
+    [Fact]
+    public void Calls_a_folder_gone_only_when_its_parent_can_be_read_and_lacks_it()
+    {
+        Make("/home/me");
+
+        Assert.False(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
+        // No parent to read either: unknown, not gone.
+        Assert.Null(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/srv/nothing/app")));
+    }
+
+    [Fact]
+    public void Doesnt_look_in_a_distro_that_isnt_running()
+    {
+        Make("/home/me");
+
+        Assert.Null(Lookup().Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
+        Assert.Null(Lookup().FolderNames(new ProjectFolder("Ubuntu", "/home/me")));
+    }
+
+    [Fact]
+    public void Doesnt_call_a_folder_gone_when_a_link_or_file_has_its_name()
+    {
+        Make("/home/me");
+        string home = Path.Combine(_root, "Ubuntu") + "/home/me";
+        // A link to a folder that isn't reachable from here, and a file, as \\wsl.localhost can show Linux links.
+        Directory.CreateSymbolicLink(Path.Combine(home, "linked"), "/nowhere/at/all");
+        File.WriteAllText(Path.Combine(home, "plain"), "");
+
+        Assert.Null(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/linked")));
+        Assert.Null(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/plain")));
+        Assert.Equal(["linked", "plain"], Lookup("Ubuntu").FolderNames(new ProjectFolder("Ubuntu", "/home/me"))!.Order(StringComparer.Ordinal));
+    }
 }

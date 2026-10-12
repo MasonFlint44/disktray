@@ -2,23 +2,31 @@ using System.Globalization;
 using DiskTray.Core.Compact;
 using DiskTray.Core.Detection;
 using DiskTray.Core.Tray;
+using DiskTray.Core.Usage;
 
 namespace DiskTray.Core.Cleanup;
 
 /// <summary>Runs the Docker CLI. Implemented in the app.</summary>
 public interface IDockerCli
 {
+    /// <summary>Whether Docker Desktop's <c>docker.exe</c> is there. If it isn't, Docker Desktop isn't installed.</summary>
+    bool Installed { get; }
+
     /// <summary>Runs <c>docker</c> with the arguments, returning its output, or null if it failed or timed out.</summary>
     string? Run(IReadOnlyList<string> args, TimeSpan timeout);
 }
 
 /// <summary>Asks WSL what's running, and shuts it down. Implemented in the app.</summary>
-public interface IWslControl
+public interface IWslControl : IWslCommands
 {
-    IReadOnlySet<string> RunningDistros();
-
     /// <summary><c>wsl.exe --shutdown</c>. Stops every distro, Docker Desktop's included.</summary>
     bool Shutdown();
+
+    /// <summary>
+    /// Whether a distro's or Docker's disk file is open, which means WSL is using it: false
+    /// if it's free or not there, null if that can't be told.
+    /// </summary>
+    bool? DiskInUse(string path);
 }
 
 /// <summary>Starts the elevated Compactor and talks to it over a named pipe. Implemented in the app.</summary>
@@ -56,6 +64,12 @@ public sealed record CleanupRequest(
 
     public long DanglingImageBytes { get; init; }
 
+    /// <summary>
+    /// Every WSL and Docker disk file, compacted or not. "When WSL is idle" waits until none
+    /// is open, as well as until WSL says nothing runs.
+    /// </summary>
+    public IReadOnlyList<string> WslDisks { get; init; } = [];
+
     public bool Prunes => BuildCache || DanglingImages || Volumes.Count > 0;
 
     public static CleanupRequest From(CleanupState state, CleanupChoices choices, CleanupModel model, bool dryRun)
@@ -73,6 +87,7 @@ public sealed record CleanupRequest(
         {
             BuildCacheBytes = state.Docker?.BuildCacheBytes ?? 0,
             DanglingImageBytes = state.Docker?.DanglingImageBytes ?? 0,
+            WslDisks = state.Snapshot.Files.Where(f => f.Kind is DiskKind.WslDistro or DiskKind.DockerData).Select(f => f.Path).ToList(),
         };
     }
 }
@@ -118,6 +133,7 @@ public sealed record CleanupResult(
     };
 
     /// <summary>What happened, e.g. "C: got back 135 GiB. Docker 129 → 19 GiB · Ubuntu 60 → 35 GiB".</summary>
+    /// <remarks>Each drive that held a compacted disk gets its own total.</remarks>
     public string Body(IFormatProvider? provider = null)
     {
         provider ??= CultureInfo.CurrentCulture;
@@ -130,10 +146,13 @@ public sealed record CleanupResult(
         }
 
         var results = Compact?.Results ?? [];
-        long gain = results.Sum(r => r.GainBytes);
         if (!Request.DryRun && results.Any(r => r.Problem is null))
         {
-            lines.Add($"{Request.SystemDrive} got back {Size(gain)}.");
+            lines.Add(string.Join(" · ", results
+                .GroupBy(r => DriveOf(r.Path), StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => !string.Equals(g.Key, Request.SystemDrive, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => $"{g.Key} got back {Size(g.Sum(r => r.GainBytes))}")) + ".");
             lines.Add(string.Join(" · ", results.Where(r => r.Problem is null && r.BeforeBytes is not null).Select(r =>
                 $"{NameOf(r.Path)} {Size(r.BeforeBytes!.Value)} → {Size(r.AfterBytes ?? r.BeforeBytes!.Value)}")));
         }
@@ -156,6 +175,10 @@ public sealed record CleanupResult(
 
         return string.Join("\n", lines.Where(l => l.Length > 0));
     }
+
+    /// <summary>"D:" for a disk on D:, or the system drive when the path doesn't say.</summary>
+    private string DriveOf(string path) =>
+        path.Length >= 2 && path[1] == ':' && char.IsAsciiLetter(path[0]) ? char.ToUpperInvariant(path[0]) + ":" : Request.SystemDrive;
 
     private string NameOf(string path) =>
         Request.Disks.FirstOrDefault(d => string.Equals(d.File.Path, path, StringComparison.OrdinalIgnoreCase)) is { } disk
@@ -187,6 +210,20 @@ public sealed class CleanupRun(
     /// <summary>Cancelling only stops the wait for WSL to go idle; once compacting starts it runs to the end.</summary>
     public async Task<CleanupResult> RunAsync(CleanupRequest request, IProgress<CleanupProgress> progress, CancellationToken cancel)
     {
+        // The admin prompt comes first, while DiskTray still has the foreground from the
+        // Clean up click, so it shows in front rather than flashing in the taskbar after a
+        // long prune. The Compactor waits for "go" in the meantime. Off this thread, since
+        // the prompt blocks until it's answered and this is the app's UI thread.
+        string? notCompacting = null;
+        if (request.Disks.Count > 0)
+        {
+            progress.Report(new CleanupProgress(CleanupStep.AskingForAdmin, "Waiting for admin permission to compact"));
+            var disks = request.Disks.Select(d => d.File.Path).ToList();
+            notCompacting = await Task.Run(() => compactor.Start(disks, request.DryRun)) is { } notStarted
+                ? $"Nothing was compacted, because {notStarted}."
+                : await WaitForCompactorAsync();
+        }
+
         var (pruned, pruneProblems) = request.Prunes ? await PruneAsync(request, progress) : (0, []);
         if (request.Disks.Count == 0)
         {
@@ -196,29 +233,48 @@ public sealed class CleanupRun(
         CleanupResult Result(CompactStatus? status, string? problem, bool cancelled = false) =>
             new(request, pruned, pruneProblems, status, problem, cancelled);
 
-        progress.Report(new CleanupProgress(CleanupStep.AskingForAdmin, "Waiting for admin permission to compact"));
-        if (compactor.Start(request.Disks.Select(d => d.File.Path).ToList(), request.DryRun) is { } notStarted)
+        if (notCompacting is not null)
         {
-            return Result(null, $"Nothing was compacted, because {notStarted}.");
-        }
-
-        if (await WaitForCompactorAsync() is { } noStatus)
-        {
-            return Result(compactor.ReadStatus(), noStatus);
+            return Result(compactor.ReadStatus(), notCompacting);
         }
 
         if (request.When == CompactWhen.WhenIdle)
         {
-            if (!await WaitForIdleAsync(request, progress, cancel))
+            switch (await WaitForIdleAsync(request, progress, cancel))
             {
-                compactor.Signal(CompactorMessages.Cancel);
-                return Result(null, null, cancelled: true);
+                case Idle.Cancelled:
+                    compactor.Signal(CompactorMessages.Cancel);
+                    return Result(null, null, cancelled: true);
+                case Idle.CompactorGone:
+                    return Result(compactor.ReadStatus(), CompactorGone);
             }
         }
-        else if (await DesktopRunningAsync())
+        else
         {
-            progress.Report(new CleanupProgress(CleanupStep.StoppingDocker, "Stopping Docker Desktop"));
-            await Step(request, "docker desktop stop", () => docker.Run(["desktop", "stop", "--timeout", ((int)DesktopTimeout.TotalSeconds).ToString(CultureInfo.InvariantCulture)], DesktopTimeout + TimeSpan.FromSeconds(10)) is not null);
+            if (compactor.HasExited)
+            {
+                return Result(compactor.ReadStatus(), CompactorGone);
+            }
+
+            // Shutting WSL down under a running Docker Desktop only gets it restarted, so it
+            // has to stop first, and anything short of knowing it's stopped means nothing
+            // gets shut down.
+            var distros = await Task.Run(wsl.RunningDistros);
+            switch (await DesktopRunningAsync(distros))
+            {
+                case null:
+                    compactor.Signal(CompactorMessages.Cancel);
+                    return Result(null, "Nothing was compacted, because DiskTray couldn't tell whether Docker Desktop is running. Quit it, then try again.");
+                case true:
+                    progress.Report(new CleanupProgress(CleanupStep.StoppingDocker, "Stopping Docker Desktop"));
+                    if (await DockerStep(request, DockerOutput.DesktopStopCommand(DesktopTimeout), DesktopTimeout + TimeSpan.FromSeconds(10)) is null)
+                    {
+                        compactor.Signal(CompactorMessages.Cancel);
+                        return Result(null, "Nothing was compacted, because Docker Desktop didn't stop. Quit it, then try again.");
+                    }
+
+                    break;
+            }
         }
 
         progress.Report(new CleanupProgress(CleanupStep.ShuttingDownWsl, "Shutting down WSL"));
@@ -230,7 +286,7 @@ public sealed class CleanupRun(
         if (request.StartDockerAfter)
         {
             progress.Report(new CleanupProgress(CleanupStep.StartingDocker, "Starting Docker Desktop"));
-            await Step(request, "docker desktop start", () => docker.Run(["desktop", "start", "--detach"], DesktopTimeout) is not null);
+            await DockerStep(request, DockerOutput.DesktopStartCommand, DesktopTimeout);
         }
 
         return status switch
@@ -241,17 +297,20 @@ public sealed class CleanupRun(
         };
     }
 
+    private const string CompactorGone = "The Compactor closed before compacting, so nothing was shut down. See the log for details.";
+
     private async Task<(long Pruned, IReadOnlyList<string> Problems)> PruneAsync(CleanupRequest request, IProgress<CleanupProgress> progress)
     {
         progress.Report(new CleanupProgress(CleanupStep.Pruning, "Pruning Docker"));
         long pruned = 0;
         var problems = new List<string>();
 
-        async Task Prune(IReadOnlyList<string> command, long bytes, string failure)
+        // Counts what Docker says it freed, when it says; the estimate from before otherwise.
+        async Task Prune(IReadOnlyList<string> command, long estimate, string failure)
         {
-            if (await Step(request, "docker " + string.Join(' ', command), () => docker.Run(command, PruneTimeout) is not null))
+            if (await DockerStep(request, command, PruneTimeout) is { } output)
             {
-                pruned += bytes;
+                pruned += request.DryRun ? estimate : DockerOutput.ParseReclaimed(output) ?? estimate;
             }
             else
             {
@@ -276,6 +335,14 @@ public sealed class CleanupRun(
         }
 
         return (pruned, problems);
+    }
+
+    /// <summary>Runs a Docker command and returns what it printed, or null if it failed. In a dry run it's only logged.</summary>
+    private async Task<string?> DockerStep(CleanupRequest request, IReadOnlyList<string> command, TimeSpan timeout)
+    {
+        string? output = null;
+        await Step(request, "docker " + string.Join(' ', command), () => (output = docker.Run(command, timeout)) is not null);
+        return request.DryRun ? "" : output;
     }
 
     /// <summary>Runs a step, or in a dry run only logs it.</summary>
@@ -318,23 +385,52 @@ public sealed class CleanupRun(
         return "The Compactor didn't start.";
     }
 
-    /// <summary>Waits until Docker Desktop has quit and no distros run. False if cancelled first.</summary>
-    private async Task<bool> WaitForIdleAsync(CleanupRequest request, IProgress<CleanupProgress> progress, CancellationToken cancel)
+    private enum Idle
     {
+        Ready,
+        Cancelled,
+        CompactorGone,
+    }
+
+    /// <summary>
+    /// Waits until Docker Desktop has quit, WSL says no distros run, and no WSL or Docker disk
+    /// is open. Anything it can't find out counts as still running, so a hung or failing
+    /// <c>wsl.exe</c> never gets taken as idle.
+    /// </summary>
+    private async Task<Idle> WaitForIdleAsync(CleanupRequest request, IProgress<CleanupProgress> progress, CancellationToken cancel)
+    {
+        var disks = request.WslDisks.Concat(request.Disks.Select(d => d.File.Path)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         while (true)
         {
-            bool desktop = await DesktopRunningAsync();
-            var distros = await Task.Run(wsl.RunningDistros);
-            if (!desktop && distros.Count == 0)
+            if (compactor.HasExited)
             {
-                return true;
+                return Idle.CompactorGone;
             }
 
-            string waitingFor = WaitingFor(desktop, distros);
+            var distros = await Task.Run(wsl.RunningDistros);
+            bool? desktop = await DesktopRunningAsync(distros);
+            string waitingFor;
+            if (desktop == true || distros is { Count: > 0 })
+            {
+                waitingFor = WaitingFor(desktop == true, distros ?? new HashSet<string>());
+            }
+            else if (desktop is null || distros is null || await Task.Run(() => AnyInUse(disks)) is not { } inUse)
+            {
+                waitingFor = "quit Docker Desktop and close WSL (DiskTray couldn't check just now)";
+            }
+            else if (inUse)
+            {
+                waitingFor = "quit Docker Desktop and close WSL (one of its disks is still open)";
+            }
+            else
+            {
+                return Idle.Ready;
+            }
+
             if (request.DryRun)
             {
-                log($"Dry run: would wait for {waitingFor}");
-                return true;
+                log($"Dry run: would wait until you {waitingFor}");
+                return Idle.Ready;
             }
 
             progress.Report(new CleanupProgress(CleanupStep.WaitingForIdle, $"Compacts once you {waitingFor}"));
@@ -344,14 +440,33 @@ public sealed class CleanupRun(
             }
             catch (OperationCanceledException)
             {
-                return false;
+                return Idle.Cancelled;
             }
 
             if (cancel.IsCancellationRequested)
             {
-                return false;
+                return Idle.Cancelled;
             }
         }
+    }
+
+    /// <summary>True if any of the disks is open, false if none is, null if one can't be told.</summary>
+    private bool? AnyInUse(IReadOnlyList<string> disks)
+    {
+        bool unknown = false;
+        foreach (string disk in disks)
+        {
+            switch (wsl.DiskInUse(disk))
+            {
+                case true:
+                    return true;
+                case null:
+                    unknown = true;
+                    break;
+            }
+        }
+
+        return unknown ? null : false;
     }
 
     /// <summary>"quit Docker Desktop and close Ubuntu".</summary>
@@ -402,7 +517,9 @@ public sealed class CleanupRun(
         }
     }
 
-    // Off the caller's thread, since the app calls this from its UI thread.
-    private Task<bool> DesktopRunningAsync() => Task.Run(() =>
-        docker.Run(DockerOutput.DesktopStatusCommand, TimeSpan.FromSeconds(20)) is { } output && DockerOutput.ParseDesktopRunning(output));
+    /// <summary>See <see cref="DockerOutput.DesktopRunning"/>. Off the caller's thread, since the app calls this from its UI thread.</summary>
+    private async Task<bool?> DesktopRunningAsync(IReadOnlySet<string>? distros) =>
+        docker.Installed
+            ? DockerOutput.DesktopRunning(true, await Task.Run(() => docker.Run(DockerOutput.DesktopStatusCommand, TimeSpan.FromSeconds(20))), distros)
+            : false;
 }

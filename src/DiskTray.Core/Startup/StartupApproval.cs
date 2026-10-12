@@ -28,3 +28,15 @@ public static class StartupApproval
         return value;
     }
 }
+
+/// <summary>Where the Run entry should point.</summary>
+public static class StartupEntry
+{
+    /// <summary>
+    /// Whether the Run entry belongs to another copy of DiskTray and should follow this one:
+    /// it's there (so starting with Windows was set up) but names a different exe, as after
+    /// moving from a development copy to the installed one. Its on/off switch is kept.
+    /// </summary>
+    public static bool ShouldFollow(string? current, string command) =>
+        !string.IsNullOrWhiteSpace(current) && !string.Equals(current, command, StringComparison.OrdinalIgnoreCase);
+}

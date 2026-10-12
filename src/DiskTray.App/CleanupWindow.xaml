@@ -132,9 +132,9 @@
                   <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <RadioButton x:Name="WhenIdle" GroupName="When" Content="When WSL is idle" Style="{StaticResource Segment}"
-                             Checked="OnChanged" />
+                             Checked="OnWhenChanged" />
                 <RadioButton x:Name="RightAway" Grid.Column="2" GroupName="When" Content="Right away" Style="{StaticResource Segment}"
-                             Checked="OnChanged" />
+                             Checked="OnWhenChanged" />
               </Grid>
 
               <TextBlock x:Name="IdleNote" Style="{StaticResource Secondary}" Margin="0,10,0,0" LineHeight="18" />
@@ -146,7 +146,7 @@
               <TextBlock Text="Takes about 10–20 min · asks for admin" Style="{StaticResource Secondary}" Margin="0,10,0,0"
                          Foreground="{DynamicResource TextFillColorTertiaryBrush}" />
               <CheckBox x:Name="StartDocker" Content="Start Docker Desktop afterwards" Margin="0,8,0,0" FontSize="13"
-                        Checked="OnChanged" Unchecked="OnChanged" />
+                        Checked="OnChanged" Unchecked="OnChanged" Click="OnStartDockerClick" />
             </StackPanel>
           </StackPanel>
         </Border>

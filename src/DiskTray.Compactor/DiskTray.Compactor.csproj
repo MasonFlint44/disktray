@@ -8,8 +8,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- LibraryImport generates unsafe marshalling code, and the compact runs on an OVERLAPPED. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- It runs as admin, so it ignores DOTNET_STARTUP_HOOKS, which would load another DLL into it. -->
-    <StartupHookSupport>false</StartupHookSupport>
+    <!-- Compiled ahead of time to a native exe. It runs as admin, and a .NET runtime there
+         would honour environment settings anything running as the user can change, such
+         as ones that load a profiler or startup hook into it. A native exe has neither.
+         Needs Windows and the C++ build tools to publish, so the GitHub Actions build makes
+         the installer's copy; development copies publish with PublishAot=false. -->
+    <PublishAot>true</PublishAot>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />

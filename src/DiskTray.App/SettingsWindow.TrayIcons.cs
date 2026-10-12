@@ -262,7 +262,7 @@ internal partial class SettingsWindow
             Title = "Pin a file",
             Filter = "Virtual disks (*.vhdx;*.vhd;*.vmdk;*.qcow2)|*.vhdx;*.vhd;*.vmdk;*.qcow2|All files (*.*)|*.*",
         };
-        if (dialog.ShowDialog(this) == true)
+        if (dialog.ShowDialog(this) == true && CanPin(dialog.FileName))
         {
             Add(new TrayPin(PinKind.Path, dialog.FileName));
         }
@@ -271,9 +271,39 @@ internal partial class SettingsWindow
     private void AddFolder()
     {
         var dialog = new OpenFolderDialog { Title = "Pin a folder" };
-        if (dialog.ShowDialog(this) == true)
+        if (dialog.ShowDialog(this) == true && CanPin(dialog.FolderName))
         {
             Add(new TrayPin(PinKind.Path, dialog.FolderName));
+        }
+    }
+
+    /// <summary>Only files and folders on this PC's own drives; says why not otherwise.</summary>
+    private bool CanPin(string path)
+    {
+        if (TrayPin.IsLocalPath(path) && LocalDrive(path))
+        {
+            return true;
+        }
+
+        _ = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "Can't pin that",
+            Content = "DiskTray can only pin files and folders on this PC's own drives. One in WSL or on a network share "
+                + "would have to be reached on every refresh, which starts WSL or waits on the network.",
+            CloseButtonText = "OK",
+        }.ShowDialogAsync();
+        return false;
+    }
+
+    private static bool LocalDrive(string path)
+    {
+        try
+        {
+            return new DriveInfo(path[..3]).DriveType is DriveType.Fixed or DriveType.Removable;
+        }
+        catch (ArgumentException)
+        {
+            return false;
         }
     }
 

@@ -194,7 +194,7 @@
               </DockPanel>
               <CheckBox x:Name="CleanupStartDocker" Margin="0,10,0,0"
                         IsEnabled="{Binding IsChecked, ElementName=CleanupCompact}"
-                        Content="Start Docker Desktop afterwards, if it was running" />
+                        Content="When compacting right away, start Docker Desktop again afterwards, if it was running" />
             </StackPanel>
           </Border>
         </StackPanel>

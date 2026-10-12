@@ -15,7 +15,7 @@ public enum CompactWhen
 }
 
 /// <summary>What the machine looks like when the Clean up dialog opens.</summary>
-/// <param name="Docker">What a prune could remove, or null when Docker Desktop isn't running.</param>
+/// <param name="Docker">What a prune could remove, or null when Docker Desktop isn't running or didn't say.</param>
 /// <param name="RunningDistros">The WSL distros running now, Docker's own included.</param>
 public sealed record CleanupState(
     DiskSnapshot Snapshot,
@@ -24,12 +24,28 @@ public sealed record CleanupState(
     IReadOnlySet<string> RunningDistros,
     int RunningContainers)
 {
-    public bool DockerRunning => Docker is not null;
+    /// <summary>Whether Docker said what can be pruned, which the prune step needs.</summary>
+    public bool CanPrune => Docker is not null;
+
+    /// <summary>
+    /// Whether Docker Desktop is running, apart from whether it answered about pruning;
+    /// null when it couldn't be told. Defaults to "running" when it answered.
+    /// </summary>
+    public bool? DesktopRunning { get; init; }
+
+    /// <summary>False when WSL couldn't be asked what's running, so <see cref="RunningDistros"/> is a guess.</summary>
+    public bool RunningKnown { get; init; } = true;
+
+    /// <summary>Docker Desktop running, or it might be.</summary>
+    public bool DesktopMayRun =>
+        DesktopRunning ?? (Docker is not null || !RunningKnown || RunningDistros.Any(WslDistro.IsDockerOwnedName));
 }
 
 /// <summary>What the Clean up dialog starts with, from Settings › Clean up.</summary>
 /// <param name="PickDeletedProjectVolumes">Pick the unused volumes of projects whose folder is gone.</param>
-/// <param name="StartDockerAfter">Start Docker Desktop after compacting, when it was running as the dialog opened.</param>
+/// <param name="StartDockerAfter">
+/// Start Docker Desktop after compacting right away, when it was running as the dialog opened.
+/// </param>
 public sealed record CleanupDefaults(
     bool BuildCache = true,
     bool DanglingImages = true,
@@ -51,13 +67,13 @@ public sealed record CleanupChoices(
     /// <summary>
     /// What Settings says to start with; out of the box, both steps on, compacting when idle,
     /// with build cache, dangling images and the volumes of deleted projects picked. Pruning
-    /// needs Docker Desktop running, and it's only started again afterwards if it's running now.
+    /// needs Docker Desktop running. Starting it again afterwards: see <see cref="StartDockerDefault"/>.
     /// </summary>
     public static CleanupChoices Defaults(CleanupState state, CleanupDefaults? defaults = null)
     {
         defaults ??= new CleanupDefaults();
         return new(
-            Prune: state.DockerRunning && (defaults.BuildCache || defaults.DanglingImages || defaults.PickDeletedProjectVolumes),
+            Prune: state.CanPrune && (defaults.BuildCache || defaults.DanglingImages || defaults.PickDeletedProjectVolumes),
             BuildCache: defaults.BuildCache,
             DanglingImages: defaults.DanglingImages,
             Volumes: defaults.PickDeletedProjectVolumes
@@ -65,8 +81,17 @@ public sealed record CleanupChoices(
                 : new HashSet<string>(StringComparer.Ordinal),
             Compact: defaults.Compact,
             When: defaults.When,
-            StartDockerAfter: defaults.StartDockerAfter && state.DockerRunning);
+            StartDockerAfter: StartDockerDefault(state, defaults, defaults.When));
     }
+
+    /// <summary>
+    /// Whether "Start Docker Desktop afterwards" starts ticked: only when compacting right
+    /// away, which stops Docker Desktop itself, and it's running now. When compacting waits
+    /// for WSL to go idle, the user is the one who quits Docker, perhaps for the day, so it
+    /// isn't started again unless they tick it.
+    /// </summary>
+    public static bool StartDockerDefault(CleanupState state, CleanupDefaults defaults, CompactWhen when) =>
+        defaults.StartDockerAfter && when == CompactWhen.RightAway && (state.DesktopRunning ?? state.CanPrune);
 }
 
 /// <summary>A disk file to compact, with roughly how big it'll be afterwards when that's known.</summary>
@@ -96,7 +121,6 @@ public sealed record CleanupModel(
     string Summary,
     string Plan,
     bool CanStart,
-    long PruneBytes,
     IReadOnlyList<CompactTarget> ToCompact);
 
 /// <summary>Works out the Clean up dialog from what's on the machine and what's ticked.</summary>
@@ -143,7 +167,9 @@ public static class CleanupLayout
         return new CleanupModel(
             PruneDetail(docker, choices, volumes, provider),
             docker is null ? "" : Size(pruneBytes),
-            docker is null ? "Start Docker Desktop to see what can be pruned. DiskTray never starts it on its own." : null,
+            docker is not null ? null
+                : state.DesktopRunning == true ? "Docker Desktop is running but didn't say what can be pruned. Try again in a minute."
+                : "Start Docker Desktop to see what can be pruned. DiskTray never starts it on its own.",
             docker is null ? "" : Size(docker.BuildCacheBytes),
             docker is null ? "" : docker.DanglingImages == 0 ? "none" : Size(docker.DanglingImageBytes),
             state.VolumeGroups.Select(g => GroupLine(g, provider)).ToList(),
@@ -153,7 +179,6 @@ public static class CleanupLayout
             summary,
             plan,
             pruneHasWork || targets.Count > 0,
-            pruneBytes,
             targets);
     }
 
@@ -265,6 +290,11 @@ public static class CleanupLayout
     /// <summary>What shutting down WSL closes right now.</summary>
     private static IReadOnlyList<string> Warning(CleanupState state)
     {
+        if (!state.RunningKnown)
+        {
+            return ["DiskTray couldn't tell what's running in WSL. Shutting it down closes everything running there, Docker Desktop included, and unsaved work in it is lost."];
+        }
+
         var lines = new List<string>();
         foreach (string distro in state.RunningDistros
             .Where(d => !WslDistro.IsDockerOwnedName(d))
@@ -273,7 +303,7 @@ public static class CleanupLayout
             lines.Add($"{distro} – open terminals, VS Code and Claude Code sessions");
         }
 
-        if (state.DockerRunning || state.RunningDistros.Any(d => WslDistro.IsDockerOwnedName(d)))
+        if (state.DesktopMayRun)
         {
             lines.Add($"Docker Desktop – {Count(state.RunningContainers, "container")} running");
         }

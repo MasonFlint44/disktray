@@ -29,7 +29,7 @@ public class WslDistrosTests
     [Fact]
     public void Defaults_the_disk_file_name_and_strips_the_prefix()
     {
-        var distros = WslDistros.FromRegistry(new([new("{a}", "Ubuntu", @"\\?\C:\distros\ubuntu", "", 2)], null));
+        var distros = WslDistros.FromRegistry(new([new("{a}", "Ubuntu", @"\\?\C:\distros\ubuntu", "", 0xf)], null));
 
         Assert.Equal(@"C:\distros\ubuntu\ext4.vhdx", Assert.Single(distros).VhdxPath);
     }
@@ -37,7 +37,7 @@ public class WslDistrosTests
     [Fact]
     public void Uses_a_custom_disk_file_name()
     {
-        var distros = WslDistros.FromRegistry(new([new("{a}", "Arch", @"D:\wsl\arch", "arch.vhdx", 2)], null));
+        var distros = WslDistros.FromRegistry(new([new("{a}", "Arch", @"D:\wsl\arch", "arch.vhdx", 0xf)], null));
 
         Assert.Equal(@"D:\wsl\arch\arch.vhdx", Assert.Single(distros).VhdxPath);
     }
@@ -47,14 +47,16 @@ public class WslDistrosTests
     {
         var distros = WslDistros.FromRegistry(new(
             [
-                new("{a}", "Legacy", @"C:\legacy", null, 1),
-                new("{b}", null, @"C:\nameless", null, 2),
-                new("{c}", "NoPath", null, null, 2),
-                new("{d}", "Kept", @"C:\kept", null, 2),
+                new("{a}", "Legacy", @"C:\legacy", null, 0x7),
+                new("{b}", null, @"C:\nameless", null, 0xf),
+                new("{c}", "NoPath", null, null, 0xf),
+                new("{d}", "Kept", @"C:\kept", null, 0xf),
+                // No Flags value: assumed to be WSL 2, which is what's installed now.
+                new("{e}", "NoFlags", @"C:\noflags", null, null),
             ],
             null));
 
-        Assert.Equal("Kept", Assert.Single(distros).Name);
+        Assert.Equal(["Kept", "NoFlags"], distros.Select(d => d.Name));
     }
 
     [Theory]
@@ -160,7 +162,7 @@ public class DiskScannerTests
         var registry = Machine.Registry();
         registry = registry with
         {
-            Entries = [.. registry.Entries, new("{33333333-0000-0000-0000-000000000000}", "docker-desktop-data", @"\\?\C:\Users\me\AppData\Local\Docker\wsl\data", null, 2)],
+            Entries = [.. registry.Entries, new("{33333333-0000-0000-0000-000000000000}", "docker-desktop-data", @"\\?\C:\Users\me\AppData\Local\Docker\wsl\data", null, 0xf)],
         };
 
         var docker = Machine.Scan(probe, registry).Docker;

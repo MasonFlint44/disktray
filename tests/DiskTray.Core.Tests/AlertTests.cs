@@ -137,6 +137,20 @@ public class AlertRulesTests
     }
 
     [Fact]
+    public void Rearms_quietly_when_drop_notifications_are_off()
+    {
+        var off = Options with { NotifyOnDrop = false, DailyReminder = false };
+
+        var (state, quiet) = Check(new AlertState(), 120, options: off);
+        var (rearmed, _) = Check(state, 160, options: off);
+        var (_, toast) = Check(rearmed, 120, Morning.AddDays(1));
+
+        Assert.Null(quiet);
+        Assert.Equal(AlertLevel.Normal, rearmed.Fired);
+        Assert.Equal(AlertKind.Drop, toast?.Kind);
+    }
+
+    [Fact]
     public void Mentions_what_compacting_would_free()
     {
         var file = new DiskFile("docker", "Docker data", @"C:\d.vhdx", DiskKind.DockerData, 130 * GiB) { UsedBytes = 36 * GiB };

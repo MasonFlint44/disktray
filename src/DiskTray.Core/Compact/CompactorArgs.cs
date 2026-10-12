@@ -68,13 +68,24 @@ public sealed partial record CompactorArgs(string Pipe, IReadOnlyList<string> Di
         return problem is null ? new CompactorArgs(pipe!, disks, dryRun) : null;
     }
 
-    /// <summary>A full local path to a .vhdx file, e.g. <c>C:\…\ext4.vhdx</c>.</summary>
-    public static bool IsVhdx(string path) =>
-        path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == '\\'
-        && path.EndsWith(".vhdx", StringComparison.OrdinalIgnoreCase)
-        && !path.Any(char.IsControl)
-        && !path.Contains('"')
-        && !path.Split('\\').Contains("..");
+    /// <summary>
+    /// A full local path to a .vhdx file, e.g. <c>C:\…\ext4.vhdx</c>, written only one way:
+    /// backslashes, no <c>.</c> or <c>..</c>, no empty parts or parts ending in a dot or space
+    /// (which Windows quietly drops), no wildcards and no <c>:stream</c>. So the path the
+    /// user saw is the file that gets compacted.
+    /// </summary>
+    public static bool IsVhdx(string path)
+    {
+        if (path.Length < 4 || !char.IsAsciiLetter(path[0]) || path[1] != ':' || path[2] != '\\'
+            || !path.EndsWith(".vhdx", StringComparison.OrdinalIgnoreCase)
+            || path.Any(c => char.IsControl(c) || c is '"' or '/' or '*' or '?' or '<' or '>' or '|')
+            || path.IndexOf(':', 2) >= 0)
+        {
+            return false;
+        }
+
+        return path[3..].Split('\\').All(part => part.Length > 0 && part is not ("." or "..") && !part.EndsWith('.') && !part.EndsWith(' '));
+    }
 
     [GeneratedRegex("^DiskTray-compact-[0-9a-f]{32}$")]
     private static partial Regex PipePattern();

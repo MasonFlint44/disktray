@@ -18,10 +18,12 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
     public CleanupState Scan(DiskSnapshot snapshot, IReadOnlyList<string> codeFolders)
     {
         var running = wsl.RunningDistros();
-        if (!DesktopRunning() || docker.Run(DockerOutput.DiskUsageCommand, DiskUsageTimeout) is not { } dfOutput
+        var known = running ?? new HashSet<string>();
+        bool? desktop = DockerOutput.DesktopRunning(docker.Installed, docker.Installed ? docker.Run(DockerOutput.DesktopStatusCommand, QuickTimeout) : null, running);
+        if (desktop != true || docker.Run(DockerOutput.DiskUsageCommand, DiskUsageTimeout) is not { } dfOutput
             || DockerOutput.ParseDiskUsage(dfOutput) is not { } usage)
         {
-            return new CleanupState(snapshot, null, [], running, 0);
+            return new CleanupState(snapshot, null, [], known, 0) { DesktopRunning = desktop, RunningKnown = running is not null };
         }
 
         var containers = Containers();
@@ -33,12 +35,9 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
         }
 
         var searchIn = codeFolders.Select(ProjectFolder.FromWindowsPath).OfType<ProjectFolder>();
-        var groups = VolumeConfidence.Group(usage.UnusedVolumes, fromContainers, cache, searchIn, new FolderLookup(running));
-        return new CleanupState(snapshot, usage, groups, running, containers.Count(c => c.Running));
+        var groups = VolumeConfidence.Group(usage.UnusedVolumes, fromContainers, cache, searchIn, new FolderLookup(known));
+        return new CleanupState(snapshot, usage, groups, known, containers.Count(c => c.Running)) { DesktopRunning = true, RunningKnown = running is not null };
     }
-
-    private bool DesktopRunning() =>
-        docker.Run(DockerOutput.DesktopStatusCommand, QuickTimeout) is { } output && DockerOutput.ParseDesktopRunning(output);
 
     private IReadOnlyList<DockerContainer> Containers()
     {

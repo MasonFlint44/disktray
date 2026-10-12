@@ -22,6 +22,9 @@ internal partial class CleanupWindow : FluentWindow
     private bool _ready;
     private bool _scanned;
 
+    /// <summary>Whether "Start Docker Desktop afterwards" was clicked, after which it's left as the user set it.</summary>
+    private bool _startDockerSet;
+
     /// <param name="defaults">What to start with, from Settings › Clean up.</param>
     public CleanupWindow(DiskSnapshot snapshot, CleanupDefaults defaults, bool dryRun)
     {
@@ -61,9 +64,19 @@ internal partial class CleanupWindow : FluentWindow
         var defaults = CleanupChoices.Defaults(state, _defaults);
         _ready = false;
         Prune.IsChecked = defaults.Prune;
-        StartDocker.IsChecked = defaults.StartDockerAfter;
+        if (!_startDockerSet)
+        {
+            // For whichever "when" is picked now, which may have changed while Docker was asked.
+            StartDocker.IsChecked = CleanupChoices.StartDockerDefault(state, _defaults, RightAway.IsChecked == true ? CompactWhen.RightAway : CompactWhen.WhenIdle);
+        }
         _volumes.Clear();
         _volumes.UnionWith(defaults.Volumes);
+        // Volumes picked for removal are always on show, never only a count.
+        if (defaults.Prune && defaults.Volumes.Count > 0)
+        {
+            Details.Visibility = Visibility.Visible;
+        }
+
         _ready = true;
         BuildVolumeList();
         Update();
@@ -87,7 +100,7 @@ internal partial class CleanupWindow : FluentWindow
 
         var choices = Choices();
         var model = CleanupLayout.Build(_state, choices);
-        bool dockerKnown = _state.DockerRunning;
+        bool dockerKnown = _state.CanPrune;
 
         Checking.Visibility = _scanned ? Visibility.Collapsed : Visibility.Visible;
         Prune.IsEnabled = dockerKnown;
@@ -184,6 +197,21 @@ internal partial class CleanupWindow : FluentWindow
     }
 
     private void OnChanged(object sender, RoutedEventArgs e) => Update();
+
+    /// <summary>Follows the default for the new choice, until the user has set the box themselves.</summary>
+    private void OnWhenChanged(object sender, RoutedEventArgs e)
+    {
+        if (_ready && !_startDockerSet)
+        {
+            _ready = false;
+            StartDocker.IsChecked = CleanupChoices.StartDockerDefault(_state, _defaults, RightAway.IsChecked == true ? CompactWhen.RightAway : CompactWhen.WhenIdle);
+            _ready = true;
+        }
+
+        Update();
+    }
+
+    private void OnStartDockerClick(object sender, RoutedEventArgs e) => _startDockerSet = true;
 
     private void OnDetailsClick(object sender, RoutedEventArgs e)
     {

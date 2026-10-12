@@ -3,8 +3,8 @@ namespace DiskTray.Core.Usage;
 /// <summary>Runs <c>wsl.exe</c>. Implemented in the app, since WSL is Windows-only.</summary>
 public interface IWslCommands
 {
-    /// <summary>The distros that are running now. Empty if none are, or WSL couldn't be asked.</summary>
-    IReadOnlySet<string> RunningDistros();
+    /// <summary>The distros that are running now: empty if none are, null if WSL couldn't be asked.</summary>
+    IReadOnlySet<string>? RunningDistros();
 
     /// <summary>
     /// Runs a command in a distro and returns its output, or null if it failed or timed out.
@@ -20,11 +20,28 @@ public static class WslOutput
     /// The names printed by <c>wsl.exe --list --running --quiet</c>, one per line. Use
     /// <c>WSL_UTF8=1</c> so they come back as UTF-8 rather than UTF-16.
     /// </summary>
+    /// <remarks>
+    /// Windows 10's built-in wsl.exe ignores <c>WSL_UTF8</c>; its UTF-16 read as UTF-8 puts a
+    /// NUL after every character, so those are dropped.
+    /// </remarks>
     public static IReadOnlySet<string> ParseDistroNames(string output) =>
-        output.Split('\n')
-            .Select(line => line.Trim().Trim('﻿', '\0'))
+        output.Replace("\0", "", StringComparison.Ordinal).Split('\n')
+            .Select(line => line.Trim().Trim('\uFEFF'))
             .Where(line => line.Length > 0)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The running distros from <c>wsl.exe --list --running --quiet</c>, or null when WSL
+    /// couldn't say: it timed out or didn't start (no exit code), or it failed with one of its
+    /// error codes ("Wsl/Service/…"). With none running it exits non-zero without one.
+    /// </summary>
+    public static IReadOnlySet<string>? ParseRunningDistros(string? output, int? exitCode) => exitCode switch
+    {
+        null => null,
+        0 => ParseDistroNames(output ?? ""),
+        _ when (output ?? "").Replace("\0", "", StringComparison.Ordinal).Contains("Wsl/", StringComparison.Ordinal) => null,
+        _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+    };
 
     /// <summary>The <c>df</c> command whose output <see cref="ParseUsedBytes"/> reads.</summary>
     public static IReadOnlyList<string> DfCommand(string mountPoint) => ["df", "-P", "-B1", mountPoint];

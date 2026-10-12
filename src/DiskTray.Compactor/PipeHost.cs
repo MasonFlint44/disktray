@@ -86,7 +86,11 @@ internal sealed class PipeHost : ICompactorHost, IDisposable
         }
     }
 
-    public string? CompactDisk(string path, Action<int> progress) => VirtualDisk.Compact(path, progress);
+    public string? CompactDisk(string path, Action<int> progress)
+    {
+        using var hold = PathHold.Take(path, out string? problem);
+        return hold is null ? $"Didn't compact {Path.GetFileName(path)}: {problem}." : VirtualDisk.Compact(path, progress);
+    }
 
     public void Report(CompactStatus status) => Send(CompactorMessages.Status(status));
 

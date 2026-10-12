@@ -4,12 +4,26 @@
        GitHub Actions workflow, after both apps are published to PublishDir. -->
   <PropertyGroup>
     <OutputName>DiskTray-$(Version)-x64</OutputName>
+    <!-- scripts/build-msi.sh: a local build to try the installer with, whose Compactor isn't native. -->
+    <OutputName Condition="'$(DevBuild)' == 'true'">DiskTray-$(Version)-x64-dev</OutputName>
     <InstallerPlatform>x64</InstallerPlatform>
     <OutputPath>$(MSBuildThisFileDirectory)..\artifacts\msi\</OutputPath>
     <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishDir>
     <DefineConstants>PublishDir=$(PublishDir);Version=$(Version)</DefineConstants>
-    <!-- Both treat the Start menu as per-user, so they want the shortcut keyed in HKCU. It's
-         the all-users Start menu here (ALLUSERS=1), owned by DiskTray.exe's component. -->
-    <SuppressIces>ICE43;ICE57</SuppressIces>
+    <!-- ICE43 and ICE57 treat the Start menu as per-user, so they want the shortcut keyed in
+         HKCU; it's the all-users Start menu here (ALLUSERS=1), owned by DiskTray.exe's
+         component. ICE61 warns about same-version upgrades, which are wanted. ICE63 warns
+         about anything between InstallInitialize and RemoveExistingProducts, which is
+         where other users' copies are closed, so the old version's files aren't in use. -->
+    <SuppressIces>ICE43;ICE57;ICE61;ICE63</SuppressIces>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
+  <!-- A release must carry the native Compactor: a .NET one beside it (its .dll) means the
+       NativeAOT publish didn't happen. -->
+  <Target Name="RequireNativeCompactor" BeforeTargets="Build" Condition="'$(DevBuild)' != 'true'">
+    <Error Condition="!Exists('$(PublishDir)DiskTray.Compactor.exe')" Text="DiskTray.Compactor.exe isn't in $(PublishDir)." />
+    <Error Condition="Exists('$(PublishDir)DiskTray.Compactor.dll')" Text="The Compactor in $(PublishDir) isn't the NativeAOT build. Publish it on Windows without PublishAot=false, or build with DevBuild=true for a local test MSI." />
+  </Target>
 </Project>

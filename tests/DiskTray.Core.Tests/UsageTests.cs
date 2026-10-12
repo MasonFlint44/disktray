@@ -52,6 +52,21 @@ public class WslOutputTests
 
     [Fact]
     public void Matches_distro_names_ignoring_case() => Assert.Contains("ubuntu", WslOutput.ParseDistroNames("Ubuntu\n"));
+
+    [Fact]
+    public void Reads_names_that_came_back_as_utf16() =>
+        Assert.Equal(["Ubuntu", "Debian"], WslOutput.ParseDistroNames("U\0b\0u\0n\0t\0u\0\r\0\n\0D\0e\0b\0i\0a\0n\0\r\0\n\0"));
+
+    [Fact]
+    public void Knows_whats_running_only_when_wsl_answered()
+    {
+        Assert.Equal(["Ubuntu"], WslOutput.ParseRunningDistros("Ubuntu\r\n", 0));
+        // None running: WSL says so and exits non-zero, without an error code.
+        Assert.Empty(WslOutput.ParseRunningDistros("There are no running distributions.\r\n", -1)!);
+        // Timed out or didn't start, or failed with one of WSL's error codes.
+        Assert.Null(WslOutput.ParseRunningDistros(null, null));
+        Assert.Null(WslOutput.ParseRunningDistros("Catastrophic failure\r\nError code: Wsl/Service/E_UNEXPECTED\r\n", -1));
+    }
 }
 
 public class UsageCacheTests
@@ -78,14 +93,17 @@ public class UsageCacheTests
     public void Starts_empty_when_the_file_is_unusable(string? json) => Assert.Null(UsageCache.FromJson(json).Get(@"C:\d.vhdx"));
 
     [Fact]
-    public void Forgets_files_that_are_gone()
+    public void Forgets_files_only_once_theyve_been_gone_a_while()
     {
         var cache = new UsageCache();
         cache.Set(@"C:\a.vhdx", Reading);
         cache.Set(@"C:\b.vhdx", Reading);
 
-        cache.RetainOnly([@"c:\A.vhdx"]);
+        // Docker detection switched off for a day: its reading stays.
+        cache.RetainOnly([@"c:\A.vhdx"], Reading.MeasuredAt.AddDays(1));
+        Assert.NotNull(cache.Get(@"C:\b.vhdx"));
 
+        cache.RetainOnly([@"c:\A.vhdx"], Reading.MeasuredAt + UsageCache.ForgetAfter);
         Assert.NotNull(cache.Get(@"C:\a.vhdx"));
         Assert.Null(cache.Get(@"C:\b.vhdx"));
     }
@@ -173,14 +191,30 @@ public class UsageMeterTests
     }
 
     [Fact]
-    public void Forgets_disk_files_that_are_gone()
+    public void Forgets_disk_files_that_have_been_gone_a_month()
     {
         var cache = new UsageCache();
-        cache.Set(@"C:\old\ext4.vhdx", new UsageReading(1, 2, Now));
+        cache.Set(@"C:\old\ext4.vhdx", new UsageReading(1, 2, Now - UsageCache.ForgetAfter));
+        cache.Set(@"C:\recent\ext4.vhdx", new UsageReading(1, 2, Now.AddDays(-1)));
 
         Measure(new FakeWslCommands(), cache);
 
         Assert.Null(cache.Get(@"C:\old\ext4.vhdx"));
+        Assert.NotNull(cache.Get(@"C:\recent\ext4.vhdx"));
+    }
+
+    [Fact]
+    public void Falls_back_to_the_last_reading_when_wsl_cant_be_asked()
+    {
+        var cache = new UsageCache();
+        var ubuntu = Machine.Scan().PrimaryDistro!;
+        cache.Set(ubuntu.Path, new UsageReading(30L << 30, ubuntu.SizeBytes, Now.AddHours(-1)));
+        var wsl = new FakeWslCommands { Unreachable = true };
+
+        var measured = Measure(wsl, cache);
+
+        Assert.Empty(wsl.Calls);
+        Assert.Equal(30L << 30, measured.PrimaryDistro!.UsedBytes);
     }
 
     [Fact]

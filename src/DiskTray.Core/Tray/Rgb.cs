@@ -109,7 +109,6 @@ public static class Palette
     public static readonly Rgb Outline = Rgb.FromHex("#5A5A5A");
     public static readonly Rgb Warning = Rgb.FromHex("#F0B040");
     public static readonly Rgb Critical = Rgb.FromHex("#E5534B");
-    public static readonly Rgb Accent = Rgb.FromHex("#4CC2FF");
 
     /// <summary>The usual colors for pinned files and folders, in turn.</summary>
     public static readonly IReadOnlyList<ItemColor> Extras =
@@ -118,8 +117,6 @@ public static class Palette
         new(Rgb.FromHex("#3FB950")),
         new(Rgb.FromHex("#1ABC9C")),
     ];
-
-    public static ItemColor For(DiskKind kind) => kind == DiskKind.DockerData ? Docker : Wsl;
 
     /// <summary>
     /// Whether a picked color is hard to tell from the free slice next to it: below 1.5 : 1,

@@ -1,7 +1,11 @@
 using System.IO;
 using System.IO.Pipes;
 using System.Security.Principal;
+using System.Runtime.InteropServices;
 using DiskTray.Core.Compact;
+
+// virtdisk.dll and kernel32.dll only ever from System32, never a copy beside the exe.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
 namespace DiskTray.Compactor;
 

@@ -26,6 +26,7 @@ public partial class App : Application
         {
             Log.Error("Unhandled error", args.Exception);
             args.Handled = true;
+            _tray?.ShowUnexpectedError();
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) => Log.Error("Unhandled error", args.ExceptionObject as Exception);
 
@@ -87,6 +88,10 @@ public partial class App : Application
         {
             settings = settings with { StartupRegistered = true };
             SettingsFile.Save(settings);
+        }
+        else
+        {
+            StartupRegistration.Follow();
         }
 
         Themes.Choose(settings.Theme);
