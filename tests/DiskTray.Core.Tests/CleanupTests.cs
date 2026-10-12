@@ -854,7 +854,9 @@ public sealed class FolderLookupTests : IDisposable
         Directory.CreateSymbolicLink(Path.Combine(home, "linked"), "/nowhere/at/all");
         File.WriteAllText(Path.Combine(home, "plain"), "");
 
-        Assert.Null(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/linked")));
+        // Never gone. Windows counts a folder link as a folder even when what it points to
+        // isn't there, so there it's "exists"; elsewhere it can't be told.
+        Assert.NotEqual(false, Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/linked")));
         Assert.Null(Lookup("Ubuntu").Exists(new ProjectFolder("Ubuntu", "/home/me/plain")));
         Assert.Equal(["linked", "plain"], Lookup("Ubuntu").FolderNames(new ProjectFolder("Ubuntu", "/home/me"))!.Order(StringComparer.Ordinal));
     }
