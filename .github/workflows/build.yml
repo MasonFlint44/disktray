@@ -70,7 +70,9 @@ jobs:
           $out = dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --filter-trait "Compactor=exe" 2>&1
           $out | Write-Host
           if ($LASTEXITCODE -ne 0) { throw "The native Compactor's tests failed" }
-          if (-not ($out | Select-String '^\s*skipped: 0\s*$') -or -not ($out | Select-String '^\s*succeeded: [1-9]')) { throw "The native Compactor's tests didn't all run" }
+          # Without the colour codes the summary comes with.
+          $summary = ($out | Out-String) -replace "$([char]27)\[[0-9;]*m", ''
+          if ($summary -notmatch '(?m)^\s*skipped: 0\s*$' -or $summary -notmatch '(?m)^\s*succeeded: [1-9]') { throw "The native Compactor's tests didn't all run" }
       - name: Build the MSI
         run: dotnet build installer -c Release
       - name: Download the latest release's MSI
@@ -158,7 +160,9 @@ jobs:
           $out = dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed" 2>&1
           $out | Write-Host
           if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
-          if (-not ($out | Select-String '^\s*skipped: 0\s*$') -or -not ($out | Select-String '^\s*succeeded: [1-9]')) { throw "The installed Compactor's test didn't run" }
+          # Without the colour codes the summary comes with.
+          $summary = ($out | Out-String) -replace "$([char]27)\[[0-9;]*m", ''
+          if ($summary -notmatch '(?m)^\s*skipped: 0\s*$' -or $summary -notmatch '(?m)^\s*succeeded: [1-9]') { throw "The installed Compactor's test didn't run" }
 
           # Running, as it is for most people who uninstall, so closing it is part of it.
           Start-Sleep -Seconds 5
