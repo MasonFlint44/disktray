@@ -20,6 +20,10 @@
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- How links and real paths are judged, the same here as in the app. -->
+    <Compile Include="../Shared/LinkSafePath.cs" Link="LinkSafePath.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- The pipe, path and account checks and the compact are tested on Windows. -->
     <InternalsVisibleTo Include="DiskTray.Windows.Tests" />
   </ItemGroup>

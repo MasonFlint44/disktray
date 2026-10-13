@@ -23,7 +23,12 @@ internal static class CleanupMarkerFile
     /// </summary>
     public static bool CompactorRunning()
     {
-        int session = Process.GetCurrentProcess().SessionId;
+        int session;
+        using (var self = Process.GetCurrentProcess())
+        {
+            session = self.SessionId;
+        }
+
         var found = Process.GetProcessesByName("DiskTray.Compactor");
         try
         {

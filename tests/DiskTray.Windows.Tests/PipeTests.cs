@@ -24,25 +24,32 @@ public class PipeTests
 
         public string? Check(string path) => null;
 
-        public long? FileSize(string path) => 1000;
-
-        public bool InUse(string path) => false;
-
-        public string? CompactDisk(string path, Action<int> progress)
-        {
-            for (int percent = 0; percent <= 100; percent += 25)
-            {
-                progress(percent);
-            }
-
-            return null;
-        }
+        public DiskHold Hold(string path, bool dryRun) => new(new NoDisk());
 
         public void Report(CompactStatus status) => pipe.Report(status);
 
         public void Log(string message) => pipe.Log(message);
 
         public void Wait(TimeSpan delay) => Thread.Sleep(50);
+
+        private sealed class NoDisk : IHeldDisk
+        {
+            public long? Size => 1000;
+
+            public string? Compact(Action<int> progress)
+            {
+                for (int percent = 0; percent <= 100; percent += 25)
+                {
+                    progress(percent);
+                }
+
+                return null;
+            }
+
+            public void Dispose()
+            {
+            }
+        }
     }
 
     /// <summary>Opens the app's end, listening for <paramref name="clientId"/>, and connects the Compactor's end.</summary>
@@ -107,6 +114,24 @@ public class PipeTests
             launcher.Dispose();
 
             Assert.Equal(2, await run.WaitAsync(Timeout, TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Fact]
+    public async Task Stops_waiting_when_its_own_end_of_the_pipe_is_closed_under_the_reader()
+    {
+        var (launcher, host, name) = Connect();
+        using (launcher)
+        {
+            var run = RunCompactor(host, name);
+            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
+
+            // Closing it under the reader thread's waiting read, which shows up as a disposed
+            // stream rather than an IOException; the reader takes it as the app gone, not a crash.
+            host.Dispose();
+
+            Assert.Equal(2, await run.WaitAsync(Timeout, TestContext.Current.CancellationToken));
+            Assert.Equal(AppSignal.Gone, host.Poll());
         }
     }
 

@@ -52,16 +52,12 @@
     <util:CloseApplication Id="CloseOtherSessions" Target="DiskTray.exe" ElevatedCloseMessage="yes" ElevatedEndSessionMessage="yes"
                            TerminateProcess="1" Timeout="15" RebootPrompt="no" Condition="Installed OR WIX_UPGRADE_DETECTED" />
 
-    <!-- A Compactor running means a disk is being compacted. Ending it part way, or
-         replacing it, would leave that disk half done, so the install stops instead. By
-         then an upgrade has closed DiskTray (CloseDiskTray comes first, so its files can be
-         replaced), so it's started again just before, to follow the compact and say when
-         it's done. -->
+    <!-- A Compactor running, in any signed-in user's session, means a clean up is compacting
+         a disk or about to. Ending it part way, or replacing it, would leave that disk half
+         done, so the install stops instead (and DiskTray starts again, below). -->
     <util:CloseApplication Id="CompactorRunning" Target="DiskTray.Compactor.exe" Property="COMPACTORRUNNING" RebootPrompt="no" />
     <CustomAction Id="StopWhileCompacting"
-                  Error="DiskTray is compacting a disk right now, so it can't be upgraded or removed. Wait until DiskTray says it's done, then try again." />
-    <CustomAction Id="StartDiskTrayAgain" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
-                  ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
+                  Error="A DiskTray clean up is compacting a disk, or about to (perhaps for another signed-in user), so DiskTray can't be upgraded or removed right now. Try again once it's done." />
 
     <!-- These run as the user doing the install, without admin rights, in their session. -->
 
@@ -84,6 +80,14 @@
          started (winget, say), since DiskTray was closed for it. -->
     <CustomAction Id="StartDiskTray" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
                   ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
+    <!-- And the same when an upgrade or repair that closed it doesn't finish: cancelled (at
+         the "files in use" question, say), stopped by a running Compactor, or failed and
+         rolled back, which leaves the old version in place to start. Windows Installer runs
+         these as the install ends, one for each way it can end without finishing. -->
+    <CustomAction Id="StartDiskTrayAfterCancel" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
+                  ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
+    <CustomAction Id="StartDiskTrayAfterError" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
+                  ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
 
     <InstallExecuteSequence>
       <Custom Action="CloseDiskTray" Before="InstallValidate"
@@ -96,14 +100,16 @@
       <Custom Action="RemoveUserData" After="InstallInitialize"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="override Wix4CloseApplications_X64" After="RemoveUserData" />
-      <!-- Only where CloseDiskTray closed it, and not for an install run as SYSTEM. -->
-      <Custom Action="StartDiskTrayAgain" After="Wix4CloseApplications_X64"
-              Condition="COMPACTORRUNNING AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot; AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
-      <Custom Action="StopWhileCompacting" After="StartDiskTrayAgain" Condition="COMPACTORRUNNING" />
+      <Custom Action="StopWhileCompacting" After="Wix4CloseApplications_X64" Condition="COMPACTORRUNNING" />
       <Custom Action="CloseAnyCopy" After="InstallFinalize"
               Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="StartDiskTray" After="CloseAnyCopy"
               Condition="NOT REMOVE~=&quot;ALL&quot; AND (UILevel &gt; 2 OR WIX_UPGRADE_DETECTED) AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
+      <!-- Wherever CloseDiskTray ran, so it was closed; not for an install run as SYSTEM. -->
+      <Custom Action="StartDiskTrayAfterCancel" OnExit="cancel"
+              Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot; AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
+      <Custom Action="StartDiskTrayAfterError" OnExit="error"
+              Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot; AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
     </InstallExecuteSequence>
   </Package>
 </Wix>

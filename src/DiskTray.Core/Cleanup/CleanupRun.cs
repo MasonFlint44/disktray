@@ -193,7 +193,7 @@ public sealed record CleanupResult(
     public string Title => "Clean up " + (Request.DryRun ? "dry run " : "") + (Cancelled ? "cancelled" : Succeeded ? "finished" : "didn't finish");
 
     /// <summary>What happened, e.g. "C: got back 135 GiB. Docker 129 → 19 GiB · Ubuntu 60 → 35 GiB".</summary>
-    /// <remarks>Each drive that held a compacted disk gets its own total.</remarks>
+    /// <remarks>Each drive that held a compacted disk gets its own total; one whose disks all failed gets none.</remarks>
     public string Body(IFormatProvider? provider = null)
     {
         provider ??= CultureInfo.CurrentCulture;
@@ -209,6 +209,7 @@ public sealed record CleanupResult(
         if (!Request.DryRun && results.Any(r => r.Problem is null))
         {
             lines.Add(string.Join(" · ", results
+                .Where(r => r.Problem is null)
                 .GroupBy(r => DriveOf(r.Path), StringComparer.OrdinalIgnoreCase)
                 .OrderBy(g => !string.Equals(g.Key, Request.SystemDrive, StringComparison.OrdinalIgnoreCase))
                 .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)

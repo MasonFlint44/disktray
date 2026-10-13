@@ -13,18 +13,12 @@ public interface ICompactorHost
     /// </summary>
     string? Check(string path);
 
-    long? FileSize(string path);
-
-    /// <summary>Whether something (WSL) has the file open.</summary>
-    bool InUse(string path);
-
     /// <summary>
-    /// Compacts the detached disk with Windows' virtual disk API, reporting the percentage done
-    /// every second or so, changed or not, so the app can tell a slow compact from a stuck one.
-    /// Makes the <see cref="Check"/> again first, with the file held. Returns why it didn't
-    /// work, or null when it did.
+    /// Holds the disk for compacting, making the <see cref="Check"/> again with it held, so
+    /// it's the held file that's checked, measured and compacted. On a dry run it's only
+    /// looked at, which works while WSL has it open.
     /// </summary>
-    string? CompactDisk(string path, Action<int> progress);
+    DiskHold Hold(string path, bool dryRun);
 
     /// <summary>Sends the status to the app. Carries on if the app has gone.</summary>
     void Report(CompactStatus status);
@@ -34,6 +28,26 @@ public interface ICompactorHost
 
     void Wait(TimeSpan delay);
 }
+
+/// <summary>A disk the Compactor holds: it can't be renamed, replaced or turned into a link until disposed.</summary>
+public interface IHeldDisk : IDisposable
+{
+    /// <summary>The file's size now, or null if it can't be read.</summary>
+    long? Size { get; }
+
+    /// <summary>
+    /// Compacts the detached disk with Windows' virtual disk API, reporting the percentage
+    /// done every second or so, changed or not, so the app can tell a slow compact from a
+    /// stuck one. Returns why it didn't work, or null when it did.
+    /// </summary>
+    string? Compact(Action<int> progress);
+}
+
+/// <summary>
+/// What came of holding a disk: the held disk, or why it couldn't be held. InUse means
+/// something (WSL) still has it open, which can be worth waiting out.
+/// </summary>
+public sealed record DiskHold(IHeldDisk? Disk, string? Problem = null, bool InUse = false);
 
 /// <summary>
 /// The elevated Compactor's job: check each disk, wait until the app says WSL is shut down,
@@ -47,7 +61,9 @@ public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
 
     /// <summary>
     /// The longest the Compactor goes without sending a status once it's been told to go.
-    /// Every step reports at least once a second; this leaves room for a slow machine.
+    /// Every step reports at least once a second, except cancelling a compact that Windows
+    /// stopped reporting on, which waits up to a minute for it; this leaves room for that and
+    /// for a slow machine.
     /// </summary>
     public static readonly TimeSpan QuietLimit = TimeSpan.FromMinutes(2);
 
@@ -124,27 +140,14 @@ public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
             Report(new CompactStatus(CompactState.Compacting, index, percent, Results: done, DryRun: args.DryRun));
 
         Progress(0);
-        long? before = host.FileSize(disk);
-        if (before is null)
-        {
-            return new DiskResult(disk, null, null, $"{disk} wasn't found.");
-        }
-
-        // Checked already, as for a real run; only holding the file and compacting are left out.
-        if (args.DryRun)
-        {
-            host.Log($"Dry run: would compact {disk} ({before} bytes).");
-            Progress(100);
-            return new DiskResult(disk, before, before);
-        }
-
         // WSL can take a few seconds to let go of a disk after it shuts down.
         var waited = TimeSpan.Zero;
-        while (host.InUse(disk))
+        DiskHold hold;
+        while ((hold = host.Hold(disk, args.DryRun)).InUse)
         {
             if (waited >= InUseTimeout)
             {
-                return new DiskResult(disk, before, before, $"{disk} is still in use, so WSL or Docker must have started again.");
+                return new DiskResult(disk, null, null, $"{disk} is still in use, so WSL or Docker must have started again.");
             }
 
             host.Wait(PollInterval);
@@ -153,11 +156,29 @@ public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
             Progress(0);
         }
 
-        host.Log($"Compacting {disk} ({before} bytes).");
-        string? problem = host.CompactDisk(disk, Progress);
-        long? after = host.FileSize(disk);
-        host.Log(problem is null ? $"{disk} is now {after} bytes." : $"Couldn't compact {disk}: {problem}");
-        return new DiskResult(disk, before, after, problem is null ? null : $"Couldn't compact {disk}: {problem}.");
+        if (hold.Disk is not { } held)
+        {
+            return new DiskResult(disk, null, null, $"Couldn't compact {disk}: {hold.Problem}.");
+        }
+
+        using (held)
+        {
+            long? before = held.Size;
+
+            // Checked and looked at, as for a real run; only holding the file's data and compacting are left out.
+            if (args.DryRun)
+            {
+                host.Log($"Dry run: would compact {disk} ({before} bytes).");
+                Progress(100);
+                return new DiskResult(disk, before, before);
+            }
+
+            host.Log($"Compacting {disk} ({before} bytes).");
+            string? problem = held.Compact(Progress);
+            long? after = held.Size;
+            host.Log(problem is null ? $"{disk} is now {after} bytes." : $"Couldn't compact {disk}: {problem}");
+            return new DiskResult(disk, before, after, problem is null ? null : $"Couldn't compact {disk}: {problem}.");
+        }
     }
 
     private void Report(CompactStatus status) => host.Report(status);

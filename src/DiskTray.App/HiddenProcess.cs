@@ -58,7 +58,7 @@ internal static class HiddenProcess
             var clock = Stopwatch.StartNew();
             if (!process.WaitForExit(timeout) || !Task.WaitAll([output, error], Remaining(timeout, clock)))
             {
-                process.Kill(entireProcessTree: true);
+                Kill(process);
                 return (null, $"timed out after {timeout.TotalSeconds:0} s", null);
             }
 
@@ -69,6 +69,22 @@ internal static class HiddenProcess
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
         {
             return (null, e.Message, null);
+        }
+    }
+
+    /// <summary>
+    /// Ends the process and whatever it started. One that can't be ended (it's gone already,
+    /// or a child won't go) still counts as timed out, rather than as a failure to run it.
+    /// </summary>
+    private static void Kill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception e) when (e is AggregateException or System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
+        {
+            Log.Error($"Couldn't end {process.StartInfo.FileName} after it timed out", e);
         }
     }
 

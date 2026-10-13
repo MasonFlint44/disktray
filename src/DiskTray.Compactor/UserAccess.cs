@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using DiskTray.Core.Compact;
 using Microsoft.Win32.SafeHandles;
 
 namespace DiskTray.Compactor;
@@ -19,10 +20,10 @@ internal sealed partial class UserAccess : IDisposable
     private const int TokenTypeImpersonation = 2;
     private const uint FileWriteData = 0x2;
     private const uint ShareAll = 0x7;
-    private const int ErrorAccessDenied = 5;
-    private const int ErrorSharingViolation = 32;
-    private const int ErrorLockViolation = 33;
     private const uint SePrivilegeEnabled = 0x2;
+    private const int KernelObject = 6;
+    private const uint OwnerSecurityInformation = 0x1;
+    private const int TokenUserClass = 1;
     private const uint TokenAdjustPrivileges = 0x20;
 
     private readonly SafeAccessTokenHandle _token;
@@ -30,6 +31,11 @@ internal sealed partial class UserAccess : IDisposable
     private UserAccess(SafeAccessTokenHandle token) => _token = token;
 
     /// <summary>The account of the process that made the pipe, or null with why it can't be told.</summary>
+    /// <remarks>
+    /// Windows gives the process's ID, which is reused once that process ends, so the account
+    /// found must also be the pipe's owner (DiskTray sets itself as that): an ID that has
+    /// passed to another process, a service say, can't stand in for the one that made it.
+    /// </remarks>
     public static UserAccess? OfPipeServer(SafePipeHandle pipe, out string? problem)
     {
         if (!GetNamedPipeServerProcessId(pipe, out uint server))
@@ -38,7 +44,21 @@ internal sealed partial class UserAccess : IDisposable
             return null;
         }
 
-        return OfProcess(server, out problem);
+        var user = OfProcess(server, out problem);
+        switch (user?.Owns(pipe))
+        {
+            case null:
+                problem ??= "couldn't tell which account made the pipe";
+                break;
+            case false:
+                problem = "found the pipe wasn't made by the account on its other end";
+                break;
+            case true:
+                return user;
+        }
+
+        user?.Dispose();
+        return null;
     }
 
     /// <summary>The account process <paramref name="id"/> runs as, or null with why it can't be told.</summary>
@@ -47,7 +67,7 @@ internal sealed partial class UserAccess : IDisposable
         // Another account's DiskTray (a standard user who typed an admin's password) may only
         // be readable with the debug privilege, which admins have but don't use by default.
         var token = ImpersonationToken(id, out int error);
-        if (token is null && error == ErrorAccessDenied && SetDebugPrivilege(true))
+        if (token is null && error == WindowsError.AccessDenied && SetDebugPrivilege(true))
         {
             token = ImpersonationToken(id, out error);
             // Only needed for that; off again, so nothing later runs with it.
@@ -97,13 +117,37 @@ internal sealed partial class UserAccess : IDisposable
         return error switch
         {
             // A sharing problem (WSL still has the disk open) comes after the permission check passed.
-            0 or ErrorSharingViolation or ErrorLockViolation => true,
-            ErrorAccessDenied => false,
+            0 or WindowsError.SharingViolation or WindowsError.LockViolation => true,
+            WindowsError.AccessDenied => false,
             _ => null,
         };
     }
 
     public void Dispose() => _token.Dispose();
+
+    /// <summary>Whether this account owns <paramref name="handle"/>'s object, or null when that can't be read.</summary>
+    internal unsafe bool? Owns(SafeHandle handle)
+    {
+        if (GetSecurityInfo(handle, KernelObject, OwnerSecurityInformation, out nint owner, 0, 0, 0, out nint descriptor) != 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            GetTokenInformation(_token, TokenUserClass, null, 0, out int size);
+            var buffer = new byte[size];
+            fixed (byte* user = buffer)
+            {
+                // TOKEN_USER starts with the account's SID pointer.
+                return size > 0 && GetTokenInformation(_token, TokenUserClass, user, size, out _) ? EqualSid(*(nint*)user, owner) : null;
+            }
+        }
+        finally
+        {
+            LocalFree(descriptor);
+        }
+    }
 
     private static SafeAccessTokenHandle? ImpersonationToken(uint processId, out int error)
     {
@@ -209,4 +253,18 @@ internal sealed partial class UserAccess : IDisposable
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial SafeFileHandle ReOpenFile(SafeFileHandle original, uint access, uint share, uint flags);
+
+    [LibraryImport("advapi32.dll")]
+    private static partial uint GetSecurityInfo(SafeHandle handle, int objectType, uint securityInfo, out nint owner, nint group, nint dacl, nint sacl, out nint descriptor);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool GetTokenInformation(SafeAccessTokenHandle token, int infoClass, byte* info, int length, out int returned);
+
+    [LibraryImport("advapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool EqualSid(nint one, nint other);
+
+    [LibraryImport("kernel32.dll")]
+    private static partial nint LocalFree(nint memory);
 }

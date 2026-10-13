@@ -24,7 +24,7 @@ public partial class PathHoldTests
         string disk = temp.File(@"wsl\disk\ext4.vhdx");
         string folder = Path.GetDirectoryName(disk)!;
 
-        using (var hold = PathHold.Take(disk, out string? problem))
+        using (var hold = PathHold.Take(disk, out string? problem, out _))
         {
             Assert.True(hold is not null, problem);
             Assert.ThrowsAny<IOException>(() => File.Move(disk, disk + ".moved"));
@@ -45,7 +45,7 @@ public partial class PathHoldTests
         string disk = temp.File("ext4.vhdx");
         Assert.True(CreateHardLink(Path.Combine(temp.Path, "other.vhdx"), disk, 0), $"CreateHardLink failed ({Marshal.GetLastPInvokeError()})");
 
-        Assert.Null(PathHold.Take(disk, out string? problem));
+        Assert.Null(PathHold.Take(disk, out string? problem, out _));
         Assert.Contains("hard link", problem);
     }
 
@@ -54,16 +54,11 @@ public partial class PathHoldTests
     {
         using var temp = new TestFolder();
         string disk = temp.File(@"real\ext4.vhdx");
-        string junction = Path.Combine(temp.Path, "moved");
-        using (var mklink = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "mklink", "/J", junction, Path.Combine(temp.Path, "real")]) { CreateNoWindow = true, UseShellExecute = false })!)
-        {
-            mklink.WaitForExit();
-            Assert.Equal(0, mklink.ExitCode);
-        }
+        string junction = Junction.Create(Path.Combine(temp.Path, "moved"), Path.Combine(temp.Path, "real"));
 
-        Assert.Null(PathHold.Take(Path.Combine(junction, "ext4.vhdx"), out string? problem));
+        Assert.Null(PathHold.Take(Path.Combine(junction, "ext4.vhdx"), out string? problem, out _));
         Assert.Contains("is a link", problem);
-        using var direct = PathHold.Take(disk, out string? directProblem);
+        using var direct = PathHold.Take(disk, out string? directProblem, out _);
         Assert.True(direct is not null, directProblem);
     }
 
@@ -82,7 +77,7 @@ public partial class PathHoldTests
             Assert.Skip("Making a file symlink needs admin rights or Developer Mode.");
         }
 
-        Assert.Null(PathHold.Take(link, out string? problem));
+        Assert.Null(PathHold.Take(link, out string? problem, out _));
         Assert.Contains("link", problem);
     }
 
@@ -95,7 +90,7 @@ public partial class PathHoldTests
         string shortFolder = ShortPath(folder);
         Assert.SkipWhen(shortFolder == folder, "8.3 names are off on this drive.");
 
-        Assert.Null(PathHold.Take(Path.Combine(shortFolder, "ext4.vhdx"), out string? problem));
+        Assert.Null(PathHold.Take(Path.Combine(shortFolder, "ext4.vhdx"), out string? problem, out _));
         Assert.Contains("isn't where its path says", problem);
     }
 
@@ -104,9 +99,9 @@ public partial class PathHoldTests
     {
         using var temp = new TestFolder();
 
-        Assert.Null(PathHold.Take(Path.Combine(temp.Path, "ext4.vhdx"), out string? problem));
+        Assert.Null(PathHold.Take(Path.Combine(temp.Path, "ext4.vhdx"), out string? problem, out _));
         Assert.Equal("it wasn't found", problem);
-        Assert.Null(PathHold.Take(Path.Combine(temp.Path, "gone", "ext4.vhdx"), out problem));
+        Assert.Null(PathHold.Take(Path.Combine(temp.Path, "gone", "ext4.vhdx"), out problem, out _));
         Assert.Equal($"{Path.Combine(temp.Path, "gone")} wasn't found", problem);
     }
 
@@ -122,8 +117,27 @@ public partial class PathHoldTests
             Assert.True(look is not null, problem);
         }
 
-        Assert.Null(PathHold.Take(disk, out string? holdProblem));
+        Assert.Null(PathHold.Take(disk, out string? holdProblem, out bool inUse));
         Assert.Equal("it couldn't be opened (error 32)", holdProblem);
+        Assert.True(inUse);
+    }
+
+    [Fact]
+    public void Holds_a_path_longer_than_windows_usual_limit_and_reads_its_size()
+    {
+        using var temp = new TestFolder();
+        string deep = Path.Combine(temp.Path, string.Join('\\', Enumerable.Repeat(new string('d', 60), 5)));
+        string disk = Path.Combine(deep, "ext4.vhdx");
+        Directory.CreateDirectory(deep);
+        File.WriteAllBytes(disk, new byte[1234]);
+        Assert.True(disk.Length > 260);
+
+        using var hold = PathHold.Take(disk, out string? problem, out bool inUse);
+
+        Assert.True(hold is not null, problem);
+        Assert.False(inUse);
+        Assert.Equal(1234, hold.Size);
+        Assert.Null(hold.Changed());
     }
 
     [Fact]
@@ -136,7 +150,7 @@ public partial class PathHoldTests
         Assert.True(DefineDosDevice(0, drive, temp.Path), $"DefineDosDevice failed ({Marshal.GetLastPInvokeError()})");
         try
         {
-            Assert.Null(PathHold.Take($@"{drive}\ext4.vhdx", out string? problem));
+            Assert.Null(PathHold.Take($@"{drive}\ext4.vhdx", out string? problem, out _));
             Assert.Equal("it's a link, or isn't where its path says", problem);
         }
         finally
@@ -269,26 +283,79 @@ public class UserAccessTests
         Assert.Null(user.CanWrite(nothing));
     }
 
+    /// <summary>A connected pipe owned by <paramref name="owner"/>, as DiskTray makes it owned by itself.</summary>
+    private static async Task<(NamedPipeServerStream Server, NamedPipeClientStream Client)> PipeOwnedBy(SecurityIdentifier owner)
+    {
+        string name = "DiskTray-test-" + Guid.NewGuid().ToString("N");
+        var security = new PipeSecurity();
+        security.SetOwner(owner);
+        security.AddAccessRule(new PipeAccessRule(WindowsIdentity.GetCurrent().User!, PipeAccessRights.FullControl, AccessControlType.Allow));
+        var server = NamedPipeServerStreamAcl.Create(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, security);
+        var connected = server.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+        var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
+        client.Connect(TimeSpan.FromSeconds(15));
+        await connected;
+        return (server, client);
+    }
+
     [Fact]
     public async Task Finds_the_account_of_whatever_made_the_pipe()
     {
-        string name = "DiskTray-test-" + Guid.NewGuid().ToString("N");
-        using var server = new NamedPipeServerStream(name, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
-        var connected = server.WaitForConnectionAsync(TestContext.Current.CancellationToken);
-        using var client = new NamedPipeClientStream(".", name, PipeDirection.InOut, PipeOptions.Asynchronous);
-        client.Connect(TimeSpan.FromSeconds(15));
-        await connected;
-        using var temp = new TestFolder();
+        var (server, client) = await PipeOwnedBy(WindowsIdentity.GetCurrent().User!);
+        using (server)
+        using (client)
+        {
+            using var temp = new TestFolder();
 
-        using var user = UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem);
+            using var user = UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem);
 
-        Assert.Null(problem);
-        Assert.True(CanWrite(user!, temp.File("ext4.vhdx")));
+            Assert.Null(problem);
+            Assert.True(CanWrite(user!, temp.File("ext4.vhdx")));
+        }
+    }
+
+    /// <summary>
+    /// What a process ID passed on to another process (a service, say) would look like: the
+    /// account found isn't the pipe's owner. An admin can give a pipe to Administrators, which
+    /// stands in for that here.
+    /// </summary>
+    [Fact]
+    public async Task Refuses_an_account_that_doesnt_own_the_pipe()
+    {
+        Admin.SkipUnlessElevated();
+        var (server, client) = await PipeOwnedBy(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
+        using (server)
+        using (client)
+        {
+            Assert.Null(UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem));
+            Assert.Equal("found the pipe wasn't made by the account on its other end", problem);
+        }
+    }
+
+    [Fact]
+    public void Turns_the_debug_privilege_off_again_after_reading_a_process_only_it_can_open()
+    {
+        Admin.SkipUnlessElevated();
+        using var other = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "ping.exe"), ["-n", "30", "127.0.0.1"]) { CreateNoWindow = true, UseShellExecute = false })!;
+        try
+        {
+            // Permissions that let no one in, so only the debug privilege opens it.
+            Privileges.LockOut(other);
+
+            using var user = UserAccess.OfProcess((uint)other.Id, out string? problem);
+
+            Assert.True(user is not null, problem);
+            Assert.False(Privileges.DebugIsOn(), "SeDebugPrivilege was left on.");
+        }
+        finally
+        {
+            other.Kill();
+        }
     }
 }
 
-/// <summary>The Compactor's last checks before it compacts: each refusal comes before anything is compacted.</summary>
-public class CompactDiskTests
+/// <summary>Holding a disk to compact: each refusal comes before anything is compacted, and the held file is what gets measured.</summary>
+public class DiskHoldTests
 {
     private static async Task<(NamedPipeServerStream Server, NamedPipeClientStream Client)> ConnectedPipe()
     {
@@ -312,12 +379,11 @@ public class CompactDiskTests
         using (var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _))
         using (var host = new PipeHost(client, user, null))
         {
-            var progress = new List<int>();
             const string refusal = "the account that asked can't change it, so it isn't DiskTray's to compact";
 
             Assert.Equal(refusal, host.Check(disk));
-            Assert.Equal(refusal, host.CompactDisk(disk, progress.Add));
-            Assert.Empty(progress);
+            Assert.Equal(new DiskHold(null, refusal), host.Hold(disk, dryRun: false));
+            Assert.Equal(new DiskHold(null, refusal), host.Hold(disk, dryRun: true));
         }
     }
 
@@ -330,11 +396,8 @@ public class CompactDiskTests
         using (server)
         using (var host = new PipeHost(client, null, "couldn't read which account asked (error 5)"))
         {
-            var progress = new List<int>();
-
             Assert.Equal("the Compactor couldn't read which account asked (error 5)", host.Check(disk));
-            Assert.Equal("the Compactor couldn't read which account asked (error 5)", host.CompactDisk(disk, progress.Add));
-            Assert.Empty(progress);
+            Assert.Equal(new DiskHold(null, "the Compactor couldn't read which account asked (error 5)"), host.Hold(disk, dryRun: false));
         }
     }
 
@@ -350,7 +413,7 @@ public class CompactDiskTests
             string missing = Path.Combine(temp.Path, "ext4.vhdx");
 
             Assert.Equal("it wasn't found", host.Check(missing));
-            Assert.Equal("it wasn't found", host.CompactDisk(missing, _ => { }));
+            Assert.Equal(new DiskHold(null, "it wasn't found"), host.Hold(missing, dryRun: false));
         }
     }
 
@@ -366,6 +429,31 @@ public class CompactDiskTests
         using (new FileStream(disk, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
         {
             Assert.Null(host.Check(disk));
+
+            // Held for compacting, it's in use until WSL lets go; a dry run only looks at it.
+            var hold = host.Hold(disk, dryRun: false);
+            Assert.Null(hold.Disk);
+            Assert.True(hold.InUse);
+            using var look = host.Hold(disk, dryRun: true).Disk;
+            Assert.NotNull(look);
+        }
+    }
+
+    [Fact]
+    public async Task Measures_the_disk_it_holds()
+    {
+        using var temp = new TestFolder();
+        string disk = Path.Combine(temp.Path, "ext4.vhdx");
+        File.WriteAllBytes(disk, new byte[4321]);
+        var (server, client) = await ConnectedPipe();
+        using (server)
+        using (var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _))
+        using (var host = new PipeHost(client, user, null))
+        {
+            using var held = host.Hold(disk, dryRun: false).Disk;
+
+            Assert.Equal(4321, held!.Size);
+            Assert.ThrowsAny<IOException>(() => File.Move(disk, disk + ".moved"));
         }
     }
 }
@@ -405,11 +493,28 @@ public class CompactTests
         TestDisk.Create(disk);
         var progress = new List<int>();
 
-        using var hold = PathHold.Take(disk, out string? problem);
+        using var hold = PathHold.Take(disk, out string? problem, out _);
         Assert.Null(problem);
 
-        Assert.Null(VirtualDisk.Compact(disk, progress.Add));
+        Assert.Null(VirtualDisk.Compact(disk, hold!, progress.Add));
         Assert.NotEmpty(progress);
+    }
+
+    [Fact]
+    public void Compacts_a_disk_whose_path_is_longer_than_windows_usual_limit()
+    {
+        Admin.SkipUnlessElevated();
+        using var temp = new TestFolder();
+        string deep = Path.Combine(temp.Path, string.Join('\\', Enumerable.Repeat(new string('d', 60), 5)));
+        Directory.CreateDirectory(deep);
+        string disk = Path.Combine(deep, "ext4.vhdx");
+        Assert.True(disk.Length > 260);
+        TestDisk.Create(@"\\?\" + disk);
+
+        using var hold = PathHold.Take(disk, out string? problem, out _);
+        Assert.True(hold is not null, problem);
+
+        Assert.Null(VirtualDisk.Compact(disk, hold, _ => { }));
     }
 
     /// <summary>
@@ -437,7 +542,11 @@ public class CompactTests
         long before = new FileInfo(disk).Length;
         Assert.True(before > dataBytes, $"The disk file should have grown with the data, but is {before} bytes.");
 
-        Assert.Null(VirtualDisk.Compact(disk, _ => { }));
+        using (var hold = PathHold.Take(disk, out string? problem, out _))
+        {
+            Assert.True(hold is not null, problem);
+            Assert.Null(VirtualDisk.Compact(disk, hold, _ => { }));
+        }
 
         long after = new FileInfo(disk).Length;
         Assert.True(before - after >= dataBytes * 3 / 4, $"Compacting took {before} bytes to {after}.");
@@ -655,26 +764,17 @@ public class CompactTests
 /// <summary><see cref="ProtectedFolder"/>: the app won't start a Compactor that could have been swapped.</summary>
 public class ProtectedFolderTests
 {
-    [Fact]
-    public void Refuses_a_compactor_in_a_folder_anyone_can_change()
-    {
-        using var temp = new TestFolder();
-        string exe = temp.File("DiskTray.Compactor.exe");
-
-        Assert.Contains("can be changed without admin permission", ProtectedFolder.FolderProblem(exe));
-    }
-
     /// <summary>
-    /// What the installer's folder is like: only admins and Windows can change it or the
-    /// folders above it. Checked as an admin's everyday token, as DiskTray runs.
+    /// A folder like the installer's: only admins and Windows can change it, under one only
+    /// they can rename. Removed on dispose. Needs admin to make.
     /// </summary>
-    [Fact]
-    public void Lets_through_a_compactor_only_admins_can_change()
+    private sealed class AdminOnlyFolder : IDisposable
     {
-        Admin.SkipUnlessElevated();
-        var folder = Directory.CreateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DiskTray.Tests-" + Guid.NewGuid().ToString("N")));
-        try
+        public AdminOnlyFolder()
         {
+            Admin.SkipUnlessElevated();
+            var folder = Directory.CreateDirectory(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DiskTray.Tests-" + Guid.NewGuid().ToString("N")));
+            Path = folder.FullName;
             var locked = new DirectorySecurity();
             locked.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
             var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
@@ -684,32 +784,132 @@ public class ProtectedFolderTests
             // As in Program Files: being the owner gives no extra rights.
             locked.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-3-4"), FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
             folder.SetAccessControl(locked);
-            string exe = Path.Combine(folder.FullName, "DiskTray.Compactor.exe");
-            File.WriteAllText(exe, "not really an exe");
-            File.WriteAllText(Path.Combine(folder.FullName, "DiskTray.dll"), "nor a dll");
+            Exe = System.IO.Path.Combine(Path, "DiskTray.Compactor.exe");
+            File.WriteAllText(Exe, "not really an exe");
+            File.WriteAllText(System.IO.Path.Combine(Path, "DiskTray.dll"), "nor a dll");
+        }
 
+        public string Path { get; }
+
+        public string Exe { get; }
+
+        /// <summary>The folder's problem for the Compactor at <paramref name="exe"/>, checked as an admin's everyday token, as DiskTray runs.</summary>
+        public static string? ProblemAsEveryday(string exe)
+        {
             using var token = NonAdminToken.Create();
-            string? problem = WindowsIdentity.RunImpersonated(token, () => ProtectedFolder.FolderProblem(exe));
+            return WindowsIdentity.RunImpersonated(token, () => ProtectedFolder.FolderProblem(exe));
+        }
 
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
+
+    [Fact]
+    public void Refuses_a_compactor_in_a_folder_anyone_can_change()
+    {
+        using var temp = new TestFolder();
+        string exe = temp.File("DiskTray.Compactor.exe");
+
+        Assert.Contains("can be changed without admin permission", ProtectedFolder.FolderProblem(exe));
+    }
+
+    [Fact]
+    public void Lets_through_a_compactor_only_admins_can_change()
+    {
+        using var folder = new AdminOnlyFolder();
+
+        Assert.Null(AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+    }
+
+    /// <summary>
+    /// A junction the user made, pointing at the protected folder: every permission read
+    /// through it is the folder's, but the user could point it elsewhere while the admin
+    /// prompt is up.
+    /// </summary>
+    [Fact]
+    public void Refuses_a_compactor_reached_through_a_junction_even_to_a_protected_folder()
+    {
+        using var folder = new AdminOnlyFolder();
+        using var temp = new TestFolder();
+        string junction = Junction.Create(Path.Combine(temp.Path, "DiskTray"), folder.Path);
+
+        Assert.Contains("goes through a link", AdminOnlyFolder.ProblemAsEveryday(Path.Combine(junction, "DiskTray.Compactor.exe")));
+    }
+
+    [Fact]
+    public void Refuses_a_compactor_reached_through_a_junction()
+    {
+        using var temp = new TestFolder();
+        string exe = temp.File(@"real\DiskTray.Compactor.exe");
+        string junction = Junction.Create(Path.Combine(temp.Path, "linked"), Path.GetDirectoryName(exe)!);
+
+        Assert.Contains("goes through a link", ProtectedFolder.FolderProblem(Path.Combine(junction, "DiskTray.Compactor.exe")));
+    }
+
+    [Fact]
+    public void Refuses_a_link_in_the_compactors_folder()
+    {
+        using var folder = new AdminOnlyFolder();
+        using var temp = new TestFolder();
+        Junction.Create(Path.Combine(folder.Path, "runtimes"), temp.Path);
+
+        Assert.Contains("there's a link in the Compactor's folder", AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+    }
+
+    /// <summary>Write access given to some other everyday account, which opening the file as this one can't show.</summary>
+    [Fact]
+    public void Refuses_a_compactor_another_account_could_change()
+    {
+        using var folder = new AdminOnlyFolder();
+        var exe = new FileInfo(folder.Exe);
+        var security = exe.GetAccessControl();
+        security.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-5-21-1-2-3-1001"), FileSystemRights.Modify, AccessControlType.Allow));
+        exe.SetAccessControl(security);
+
+        Assert.Contains("can be changed without admin permission", AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+    }
+
+    [Theory]
+    [InlineData(null, true, "DiskTray couldn't check whether it's running as admin")]
+    [InlineData(true, true, "DiskTray is running as admin.")]
+    [InlineData(true, false, null)]
+    public void Goes_by_how_diskTray_itself_runs(bool? elevated, bool uacOn, string? starts)
+    {
+        string? problem = ProtectedFolder.Problem(@"C:
+owhere\DiskTray.Compactor.exe", () => elevated, () => uacOn);
+
+        if (starts is null)
+        {
             Assert.Null(problem);
         }
-        finally
+        else
         {
-            folder.Delete(recursive: true);
+            Assert.StartsWith(starts, problem);
         }
+    }
+
+    [Fact]
+    public void Checks_the_folder_when_diskTray_runs_without_admin_rights()
+    {
+        using var temp = new TestFolder();
+        string exe = temp.File("DiskTray.Compactor.exe");
+
+        Assert.Contains("can be changed without admin permission", ProtectedFolder.Problem(exe, () => false, () => true));
     }
 
     [Fact]
     public void Tells_a_development_compactor_from_the_native_one()
     {
         using var temp = new TestFolder();
-        string exe = temp.File(@"native\DiskTray.Compactor.exe");
-        temp.File(@"native\DiskTray.dll");
-        string dotnet = temp.File(@"dotnet\DiskTray.Compactor.exe");
-        temp.File(@"dotnet\DiskTray.Compactor.dll");
+        // The .NET build the tests are built with sits beside them; a copy of its exe alone is
+        // what an upgrade could leave behind.
+        string dotnet = Path.Combine(AppContext.BaseDirectory, "DiskTray.Compactor.exe");
+        string alone = Path.Combine(temp.Path, "DiskTray.Compactor.exe");
+        File.Copy(dotnet, alone);
+        string text = temp.File(@"text\DiskTray.Compactor.exe");
 
-        Assert.Null(CompactorLauncher.NotNative(exe));
-        Assert.Contains("development build", CompactorLauncher.NotNative(dotnet));
+        Assert.Contains("isn't the native build", CompactorLauncher.NotNative(dotnet));
+        Assert.Contains("isn't the native build", CompactorLauncher.NotNative(alone));
+        Assert.Contains("isn't the native build", CompactorLauncher.NotNative(text));
     }
 
     /// <summary>
@@ -724,9 +924,7 @@ public class ProtectedFolderTests
         Assert.SkipWhen(string.IsNullOrEmpty(exe), "Runs once the MSI is installed (DISKTRAY_INSTALLED_COMPACTOR).");
         Admin.SkipUnlessElevated();
 
-        using var token = NonAdminToken.Create();
-
         Assert.Null(CompactorLauncher.NotNative(exe!));
-        Assert.Null(WindowsIdentity.RunImpersonated(token, () => ProtectedFolder.FolderProblem(exe!)));
+        Assert.Null(AdminOnlyFolder.ProblemAsEveryday(exe!));
     }
 }

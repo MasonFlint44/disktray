@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Publishes a development copy of DiskTray from WSL to %LOCALAPPDATA%\Programs\DiskTray on
-# Windows and starts it. (It can't compact; the installer from scripts/build-msi.sh can.)
+# Windows and starts it. (It can't compact, nor can the dev MSI from scripts/build-msi.sh;
+# only a release's installer can.)
 # Closes a running copy first so its files can be replaced.
 #   scripts/deploy.sh             publish and start
 #   scripts/deploy.sh --dry-run   publish and start with Clean up only logging what it would do

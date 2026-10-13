@@ -113,9 +113,30 @@ public class InterruptedCleanupTests
     }
 
     [Fact]
+    public async Task After_an_error_starts_docker_again_once_the_compactor_has_ended()
+    {
+        _compactorChecksLeft = 2;
+
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true, Failed: true));
+
+        Assert.Equal(2, _delays);
+        Assert.Equal(["desktop start --detach"], _docker.Calls);
+        Assert.Equal(new CleanupNotice("Clean up didn't finish", "The clean up stopped with an error part way. DiskTray has started Docker Desktop again."), said);
+    }
+
+    [Fact]
+    public async Task After_an_error_says_nothing_more_when_there_is_nothing_to_start()
+    {
+        Assert.Null(await Finish(new CleanupMarker(StartDockerAfter: false, StoppedAt, Failed: true)));
+        _docker.DesktopRunning = true;
+        Assert.Null(await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Failed: true)));
+        Assert.Empty(_docker.Calls);
+    }
+
+    [Fact]
     public void Round_trips_the_marker_through_json()
     {
-        var marker = new CleanupMarker(true, StoppedAt, Compacting: true, StoppedAnswering: true);
+        var marker = new CleanupMarker(true, StoppedAt, Compacting: true, StoppedAnswering: true, Failed: true);
 
         Assert.Equal(marker, CleanupMarker.FromJson(marker.ToJson()));
     }

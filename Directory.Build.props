@@ -8,6 +8,12 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Shown in Settings › Apps. -->
     <Version>0.1.3</Version>
+    <!-- The exes' file version gets a fourth number that only grows: the GitHub Actions run
+         number there, 0 for a local build. An upgrade replaces a file only when its version
+         is higher, so this way a release replaces a local build of the same version, and each
+         build replaces the one before. -->
+    <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
+    <FileVersion>$(Version).$(BuildNumber)</FileVersion>
     <Product>DiskTray</Product>
     <!-- DiskTray is in English, so leave out the runtime's translated messages. -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

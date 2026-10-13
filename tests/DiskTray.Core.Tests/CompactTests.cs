@@ -140,9 +140,10 @@ internal sealed class FakeCompactorHost : ICompactorHost
     /// <summary>What the app says on every poll.</summary>
     public AppSignal Signal { get; set; } = AppSignal.Go;
 
+    /// <summary>The disks there are, with their sizes.</summary>
     public Dictionary<string, long> Sizes { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>How many more times each disk reports being in use.</summary>
+    /// <summary>How many more times each disk reports being in use when held for compacting.</summary>
     public Dictionary<string, int> BusyFor { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Why compacting fails, or null for it to work.</summary>
@@ -151,8 +152,14 @@ internal sealed class FakeCompactorHost : ICompactorHost
     /// <summary>Disks the checks before waiting refuse, with why.</summary>
     public Dictionary<string, string> Refused { get; } = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Every disk whose size was asked for.</summary>
-    public List<string> SizesAsked { get; } = [];
+    /// <summary>Disks refused once held (they changed since the first check), with why.</summary>
+    public Dictionary<string, string> RefusedWhenHeld { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every disk that was held, in order.</summary>
+    public List<string> Held { get; } = [];
+
+    /// <summary>Every disk that was let go of again.</summary>
+    public List<string> LetGo { get; } = [];
 
     public List<CompactStatus> Statuses { get; } = [];
 
@@ -167,35 +174,27 @@ internal sealed class FakeCompactorHost : ICompactorHost
 
     public string? Check(string path) => Refused.GetValueOrDefault(path);
 
-    public long? FileSize(string path)
+    public DiskHold Hold(string path, bool dryRun)
     {
-        SizesAsked.Add(path);
-        return Sizes.TryGetValue(path, out long size) ? size : null;
-    }
-
-    public bool InUse(string path)
-    {
-        if (!BusyFor.TryGetValue(path, out int left) || left == 0)
+        // Only holding the file's data finds WSL still using it; a dry run only looks.
+        if (!dryRun && BusyFor.TryGetValue(path, out int left) && left > 0)
         {
-            return false;
+            BusyFor[path] = left - 1;
+            return new DiskHold(null, "it couldn't be opened (error 32)", InUse: true);
         }
 
-        BusyFor[path] = left - 1;
-        return true;
-    }
-
-    public string? CompactDisk(string path, Action<int> progress)
-    {
-        Compacted.Add(path);
-        if (Failure is not null)
+        if (!Sizes.ContainsKey(path))
         {
-            return Failure;
+            return new DiskHold(null, "it wasn't found");
         }
 
-        progress(50);
-        progress(100);
-        Sizes[path] /= 4;
-        return null;
+        if (RefusedWhenHeld.TryGetValue(path, out string? why))
+        {
+            return new DiskHold(null, why);
+        }
+
+        Held.Add(path);
+        return new DiskHold(new HeldDisk(this, path));
     }
 
     public void Report(CompactStatus status) => Statuses.Add(status);
@@ -205,6 +204,27 @@ internal sealed class FakeCompactorHost : ICompactorHost
     }
 
     public void Wait(TimeSpan delay) => OnWait?.Invoke(++_waits);
+
+    private sealed class HeldDisk(FakeCompactorHost host, string path) : IHeldDisk
+    {
+        public long? Size => host.Sizes.TryGetValue(path, out long size) ? size : null;
+
+        public string? Compact(Action<int> progress)
+        {
+            host.Compacted.Add(path);
+            if (host.Failure is not null)
+            {
+                return host.Failure;
+            }
+
+            progress(50);
+            progress(100);
+            host.Sizes[path] /= 4;
+            return null;
+        }
+
+        public void Dispose() => host.LetGo.Add(path);
+    }
 }
 
 public class CompactorRunTests
@@ -302,7 +322,34 @@ public class CompactorRunTests
         host.Sizes.Remove(A);
 
         Assert.Equal(1, Run(host));
-        Assert.Contains("wasn't found", host.Statuses[^1].Results![0].Problem);
+        Assert.Equal($"Couldn't compact {A}: it wasn't found.", host.Statuses[^1].Results![0].Problem);
+        Assert.Equal([B], host.Compacted);
+    }
+
+    [Fact]
+    public void Refuses_a_disk_that_changed_after_the_first_check()
+    {
+        var host = Host();
+        host.RefusedWhenHeld[A] = "it's a link, or isn't where its path says";
+
+        Assert.Equal(1, Run(host));
+
+        Assert.Equal(new DiskResult(A, null, null, $"Couldn't compact {A}: it's a link, or isn't where its path says."), host.Statuses[^1].Results![0]);
+        Assert.Equal([B], host.Compacted);
+    }
+
+    [Fact]
+    public void Measures_and_compacts_the_disk_it_holds_and_lets_go_of_each()
+    {
+        var host = Host();
+        host.BusyFor[A] = 2;
+
+        Assert.Equal(0, Run(host));
+
+        // Held once each, after WSL let go; sizes come from the held file, before and after.
+        Assert.Equal([A, B], host.Held);
+        Assert.Equal([A, B], host.LetGo);
+        Assert.Equal([new DiskResult(A, 1000, 250), new DiskResult(B, 400, 100)], host.Statuses[^1].Results);
     }
 
     [Fact]
@@ -343,7 +390,7 @@ public class CompactorRunTests
         Assert.Equal($"Nothing was shut down or compacted. Didn't compact {A}: the account that asked can't change it. Didn't compact {B}: it's a link.", only.Message);
         Assert.Equal([new DiskResult(A, null, null, $"Didn't compact {A}: the account that asked can't change it."), new DiskResult(B, null, null, $"Didn't compact {B}: it's a link.")], only.Results);
         Assert.Empty(host.Compacted);
-        Assert.Empty(host.SizesAsked);
+        Assert.Empty(host.Held);
     }
 
     [Fact]
@@ -357,7 +404,7 @@ public class CompactorRunTests
 
         Assert.Equal(CompactState.Waiting, host.Statuses[0].State);
         Assert.Equal([B], host.Compacted);
-        Assert.Equal([B, B], host.SizesAsked);
+        Assert.Equal([B], host.Held);
         var final = host.Statuses[^1];
         Assert.Equal(CompactState.Failed, final.State);
         Assert.Equal([new DiskResult(A, null, null, $"Didn't compact {A}: the account that asked can't change it."), new DiskResult(B, 400, 100)], final.Results);
@@ -937,6 +984,20 @@ public class CleanupRunTests
         var body = new CleanupResult(request, 0, [], status, null).Body(CultureInfo.InvariantCulture);
 
         Assert.StartsWith("C: got back 80 GiB · D: got back 25 GiB.\n", body);
+    }
+
+    [Fact]
+    public void Leaves_out_a_drive_whose_disks_all_failed()
+    {
+        var onD = Ubuntu with { Path = @"D:\wsl\ubuntu\ext4.vhdx" };
+        var request = Request() with { Disks = [new CompactTarget(Docker, null), new CompactTarget(onD, null)] };
+        var status = new CompactStatus(CompactState.Failed, 1, 100, Results:
+            [new DiskResult(Docker.Path, 100L << 30, 20L << 30), new DiskResult(onD.Path, null, null, $"Couldn't compact {onD.Path}: it wasn't found.")]);
+
+        var body = new CleanupResult(request, 0, [], status, null).Body(CultureInfo.InvariantCulture);
+
+        Assert.StartsWith("C: got back 80 GiB.\n", body);
+        Assert.DoesNotContain("D: got back", body);
     }
 
     [Fact]

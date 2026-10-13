@@ -1,16 +1,20 @@
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
+using DiskTray.Core.Compact;
+using DiskTray.Shared;
 using Microsoft.Win32.SafeHandles;
 
 namespace DiskTray.App;
 
 /// <summary>
-/// Checks that an exe about to run with admin rights can't be changed without them: that this
-/// process can't write, replace or re-permission it, add files next to it (a DLL there would
-/// load into it), or move its folder. The installer's <c>Program Files</c> folder passes; a
-/// copy in <c>%LOCALAPPDATA%</c> doesn't, since anything running as the user could swap it
-/// before the admin prompt is answered.
+/// Checks that an exe about to run with admin rights can't be changed without them: that no
+/// account but Windows' own and admins can write, replace or re-permission it, add files
+/// next to it (a DLL there would load into it), or move its folder, and that its path holds
+/// no link that could be pointed elsewhere. The installer's <c>Program Files</c> folder
+/// passes; a copy in <c>%LOCALAPPDATA%</c> doesn't, since anything running as the user could
+/// swap it before the admin prompt is answered.
 /// </summary>
 internal static partial class ProtectedFolder
 {
@@ -22,9 +26,9 @@ internal static partial class ProtectedFolder
     private const uint DELETE = 0x10000;
     private const uint WRITE_DAC = 0x40000;
     private const uint WRITE_OWNER = 0x80000;
+    private const uint GENERIC_ALL = 0x1000_0000;
+    private const uint GENERIC_WRITE = 0x4000_0000;
     private const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
-    private const int ERROR_ACCESS_DENIED = 5;
-    private const int ERROR_SHARING_VIOLATION = 32;
 
     private static readonly uint[] FileRights = [FILE_WRITE_DATA, FILE_APPEND_DATA, DELETE, WRITE_DAC, WRITE_OWNER];
     private static readonly uint[] FolderRights = [FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY, FILE_DELETE_CHILD, DELETE, WRITE_DAC, WRITE_OWNER];
@@ -33,12 +37,30 @@ internal static partial class ProtectedFolder
     private static readonly uint[] AncestorRights = [FILE_DELETE_CHILD, DELETE, WRITE_DAC, WRITE_OWNER];
 
     /// <summary>
-    /// Null when <paramref name="exe"/>, everything in its folder and the folders above it are
-    /// out of this process's reach. Otherwise why not, to follow "because".
+    /// Who may own, or be let change, what an admin process runs: SYSTEM, Administrators,
+    /// TrustedInstaller, and the owner (OWNER RIGHTS), who must be one of those.
     /// </summary>
-    public static string? Problem(string exe)
+    private static readonly SecurityIdentifier[] Trusted =
+    [
+        new(WellKnownSidType.LocalSystemSid, null),
+        new(WellKnownSidType.BuiltinAdministratorsSid, null),
+        new("S-1-5-80-956008885-3418522649-1831038044-1850952788-1959008016"),
+        new("S-1-3-4"),
+    ];
+
+    /// <summary>CREATOR OWNER: only a pattern for what's created inside, so it grants nothing where it's set.</summary>
+    private static readonly SecurityIdentifier CreatorOwner = new(WellKnownSidType.CreatorOwnerSid, null);
+
+    /// <summary>
+    /// Null when <paramref name="exe"/>, everything in its folder and the folders above it are
+    /// out of reach of anyone without admin rights. Otherwise why not, to follow "because".
+    /// </summary>
+    public static string? Problem(string exe) => Problem(exe, IsElevated, UacOn);
+
+    /// <summary>The same, with how this process runs given, so tests can try each way.</summary>
+    internal static string? Problem(string exe, Func<bool?> isElevated, Func<bool> uacOn)
     {
-        switch (IsElevated())
+        switch (isElevated())
         {
             case null:
                 return "DiskTray couldn't check whether it's running as admin";
@@ -47,7 +69,7 @@ internal static partial class ProtectedFolder
                 // Administrator account, which UAC doesn't split) would start the Compactor with
                 // no prompt, and the checks below can't tell what a normal process could change.
                 // With UAC off everything runs as admin: there's no line for a swapped exe to cross.
-                return UacOn()
+                return uacOn()
                     ? "DiskTray is running as admin. Start it normally, from an account other than the built-in Administrator, and it asks for admin when it compacts"
                     : null;
         }
@@ -58,14 +80,30 @@ internal static partial class ProtectedFolder
     /// <summary>The checks on the files and folders, whoever is running: null when none of them can be changed.</summary>
     internal static string? FolderProblem(string exe)
     {
-        string folder = Path.GetDirectoryName(Path.GetFullPath(exe))!;
-        var checks = new List<(string Path, uint[] Rights, bool IsFolder)> { (exe, FileRights, false), (folder, FolderRights, true) };
+        string full = Path.GetFullPath(exe);
+        string folder = Path.GetDirectoryName(full)!;
+
+        // First, since every check after this reads what a path leads to: none may lead
+        // anywhere but where it says, or it could be pointed elsewhere once checked.
+        if (LinkProblem(full) is { } link)
+        {
+            return link;
+        }
+
+        var checks = new List<(string Path, uint[] Rights, bool IsFolder)> { (full, FileRights, false), (folder, FolderRights, true) };
         try
         {
-            foreach (string entry in Directory.EnumerateFileSystemEntries(folder, "*", SearchOption.AllDirectories))
+            var everything = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0, IgnoreInaccessible = false };
+            foreach (var entry in new DirectoryInfo(folder).EnumerateFileSystemInfos("*", everything))
             {
-                bool isFolder = Directory.Exists(entry);
-                checks.Add((entry, isFolder ? FolderRights : FileRights, isFolder));
+                if (entry.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                {
+                    Log.Info($"{entry.FullName} is a link");
+                    return $"there's a link in the Compactor's folder ({entry.FullName}), so DiskTray can't tell what it would run";
+                }
+
+                bool isFolder = entry is DirectoryInfo;
+                checks.Add((entry.FullName, isFolder ? FolderRights : FileRights, isFolder));
             }
 
             for (var parent = Directory.GetParent(folder); parent is not null; parent = parent.Parent)
@@ -81,13 +119,44 @@ internal static partial class ProtectedFolder
 
         foreach (var (path, rights, isFolder) in checks)
         {
-            switch (Check(path, rights, isFolder))
+            // What this account can do, which counts its groups and any deny rules; then what
+            // the owner and permissions let anyone else do.
+            var access = Check(path, rights, isFolder);
+            if (access == Access.Denied)
+            {
+                access = GrantedToOthers(path, rights, isFolder);
+            }
+
+            switch (access)
             {
                 case Access.Granted:
                     return $"the Compactor is in a folder that can be changed without admin permission ({folder}). DiskTray's installer puts it where it can't be";
                 case Access.Unknown:
                     return $"DiskTray couldn't check that {folder} is safe to run from as admin";
             }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Why the exe's path can't be trusted to lead where it says, or null: it's a link, or
+    /// its real path differs, which a link (a junction, say) on any folder above it, a short
+    /// name, a drive letter of the user's own (<c>subst</c>) or a network share would make.
+    /// </summary>
+    private static string? LinkProblem(string exe)
+    {
+        using var handle = LinkSafePath.Open(exe, 0, (uint)(FileShare.ReadWrite | FileShare.Delete), folder: false);
+        if (handle.IsInvalid)
+        {
+            Log.Info($"Couldn't open {exe} to check its path: error {Marshal.GetLastPInvokeError()}");
+            return $"DiskTray couldn't check that {Path.GetDirectoryName(exe)} is safe to run from as admin";
+        }
+
+        if (LinkSafePath.IsLink(handle) || !LinkSafePath.IsAt(handle, exe))
+        {
+            Log.Info($"{exe} is really {LinkSafePath.FinalPath(handle) ?? "somewhere it can't tell"}");
+            return $"the Compactor's path ({exe}) goes through a link or a drive letter of its own, so DiskTray can't tell what it would run. Start DiskTray from where it's installed";
         }
 
         return null;
@@ -112,10 +181,10 @@ internal static partial class ProtectedFolder
             int error = handle.IsInvalid ? Marshal.GetLastPInvokeError() : 0;
             switch (error)
             {
-                case ERROR_ACCESS_DENIED:
+                case WindowsError.AccessDenied:
                     continue;
                 case 0:
-                case ERROR_SHARING_VIOLATION:
+                case WindowsError.SharingViolation:
                     // A sharing violation comes after the permission check passed (a running
                     // exe can't be opened for writing, but it can still be replaced).
                     Log.Info($"{path} can be opened with 0x{right:x} without admin rights");
@@ -127,6 +196,48 @@ internal static partial class ProtectedFolder
         }
 
         return Access.Denied;
+    }
+
+    /// <summary>
+    /// Whether an account other than <see cref="Trusted"/> owns <paramref name="path"/> (an
+    /// owner can always re-permission it) or is allowed any of <paramref name="rights"/> on it,
+    /// by its permissions as written. Catches another everyday account having write access,
+    /// which opening it as this one can't.
+    /// </summary>
+    private static Access GrantedToOthers(string path, uint[] rights, bool isFolder)
+    {
+        try
+        {
+            const AccessControlSections sections = AccessControlSections.Owner | AccessControlSections.Access;
+            FileSystemSecurity security = isFolder ? new DirectoryInfo(path).GetAccessControl(sections) : new FileInfo(path).GetAccessControl(sections);
+            if (security.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || !Trusted.Contains(owner))
+            {
+                Log.Info($"{path} is owned by {security.GetOwner(typeof(SecurityIdentifier))?.Value ?? "no one it can read"}");
+                return Access.Granted;
+            }
+
+            uint wanted = rights.Aggregate(GENERIC_ALL | GENERIC_WRITE, (all, right) => all | right);
+            foreach (FileSystemAccessRule rule in security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier)))
+            {
+                if (rule.AccessControlType == AccessControlType.Allow
+                    && !rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly)
+                    && ((uint)rule.FileSystemRights & wanted) != 0
+                    && rule.IdentityReference is SecurityIdentifier sid
+                    && !Trusted.Contains(sid)
+                    && sid != CreatorOwner)
+                {
+                    Log.Info($"{path} lets {sid.Value} change it (0x{(uint)rule.FileSystemRights:x})");
+                    return Access.Granted;
+                }
+            }
+
+            return Access.Denied;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Log.Info($"Couldn't read who can change {path}: {e.Message}");
+            return Access.Unknown;
+        }
     }
 
     private const int TokenElevationClass = 20;

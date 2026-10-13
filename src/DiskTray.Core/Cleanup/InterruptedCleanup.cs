@@ -13,7 +13,8 @@ namespace DiskTray.Core.Cleanup;
 /// The Compactor went quiet part way, so the run ended without knowing how compacting went,
 /// and DiskTray is waiting for it to end.
 /// </param>
-public sealed record CleanupMarker(bool StartDockerAfter, DateTimeOffset StoppedAt, bool Compacting = false, bool StoppedAnswering = false)
+/// <param name="Failed">The run ended with an error part way, which DiskTray has already said.</param>
+public sealed record CleanupMarker(bool StartDockerAfter, DateTimeOffset StoppedAt, bool Compacting = false, bool StoppedAnswering = false, bool Failed = false)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -42,9 +43,9 @@ public sealed record CleanupMarker(bool StartDockerAfter, DateTimeOffset Stopped
 public sealed record CleanupNotice(string Title, string Body);
 
 /// <summary>
-/// Finishes a clean up that was left halfway, by DiskTray exiting or by a Compactor that
-/// stopped answering: waits for the Compactor to end, then starts Docker Desktop again if the
-/// run was going to and it isn't running.
+/// Finishes a clean up that was left halfway, by DiskTray exiting, by a Compactor that
+/// stopped answering or by an error: waits for the Compactor to end, then starts Docker
+/// Desktop again if the run was going to and it isn't running.
 /// </summary>
 /// <param name="compactorRunning">Whether a Compactor is running in this Windows session.</param>
 public sealed class InterruptedCleanup(
@@ -70,7 +71,7 @@ public sealed class InterruptedCleanup(
             return null;
         }
 
-        log($"A clean up from {marker.StoppedAt:g} didn't finish{(marker.StoppedAnswering ? "; its Compactor stopped answering" : marker.Compacting ? "; it was compacting" : "")}");
+        log($"A clean up from {marker.StoppedAt:g} didn't finish{(marker.Failed ? "; it ended with an error" : marker.StoppedAnswering ? "; its Compactor stopped answering" : marker.Compacting ? "; it was compacting" : "")}");
         // Compacting may still be going; starting Docker would only fail until it's done.
         for (var waited = TimeSpan.Zero; compactorRunning(); waited += CheckInterval)
         {
@@ -88,6 +89,7 @@ public sealed class InterruptedCleanup(
 
         var (title, what) = marker switch
         {
+            { Failed: true } => ("Clean up didn't finish", "The clean up stopped with an error part way"),
             { StoppedAnswering: true } => ("Clean up ended", "The Compactor that stopped answering has ended. DiskTray can't tell how compacting went, but the flyout shows the disks' sizes now"),
             { Compacting: true } => ("Clean up ended", "DiskTray closed during a clean up. Compacting carried on without it"),
             _ => ("Clean up didn't finish", "DiskTray closed during a clean up, before compacting started, so nothing was compacted"),
@@ -96,14 +98,15 @@ public sealed class InterruptedCleanup(
 
         if (!marker.StartDockerAfter || !docker.Installed)
         {
-            return Notice(what + ".");
+            // The error was told already; there's nothing to add.
+            return marker.Failed ? null : Notice(what + ".");
         }
 
         string? status = await Task.Run(() => docker.Run(DockerOutput.DesktopStatusCommand, TimeSpan.FromSeconds(20)));
         if (DockerOutput.DesktopRunning(true, status, await Task.Run(wsl.RunningDistros)) != false)
         {
             // Already running again, or it can't be told: either way, not started twice.
-            return Notice(what + ".");
+            return marker.Failed ? null : Notice(what + ".");
         }
 
         log("Starting Docker Desktop, as the unfinished clean up would have");

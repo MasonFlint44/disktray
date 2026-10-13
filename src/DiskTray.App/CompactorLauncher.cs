@@ -24,9 +24,22 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     private StreamWriter? _writer;
     private Process? _process;
     private CompactStatus? _status;
-    private volatile bool _hungUp;
-    private volatile bool _connected;
-    private volatile bool _listening;
+    private volatile PipeState _state = PipeState.NotListening;
+
+    private enum PipeState
+    {
+        /// <summary>Nothing has been started, or starting failed.</summary>
+        NotListening,
+
+        /// <summary>Waiting for the Compactor to connect; its process ending means it has ended.</summary>
+        Listening,
+
+        /// <summary>The Compactor is on the other end; only the pipe closing means it has ended.</summary>
+        Connected,
+
+        /// <summary>The pipe has closed, or something else connected and was hung up on.</summary>
+        Ended,
+    }
 
     public static string ExePath { get; } = Path.Combine(AppContext.BaseDirectory, "DiskTray.Compactor.exe");
 
@@ -34,7 +47,12 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     /// Once it has connected, only the pipe closing counts, so a status it sent just before
     /// exiting has been read by then. Before that, the process ending does.
     /// </summary>
-    public bool HasExited => _hungUp || !_listening || (_process is not null && !_connected && HasProcessExited(_process));
+    public bool HasExited => _state switch
+    {
+        PipeState.Listening => _process is not null && HasProcessExited(_process),
+        PipeState.Connected => false,
+        _ => true,
+    };
 
     public string? Start(IReadOnlyList<string> disks, bool dryRun)
     {
@@ -53,7 +71,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
 
         // A .NET build of the Compactor (a development one) would take settings the user can
         // change, such as a profiler to load, into a process running as admin. The released
-        // one is native, a single exe with no .dll of its own.
+        // one is native, which the exe itself shows.
         if (NotNative(ExePath) is { } notNative)
         {
             Log.Info($"Can't compact: {notNative}");
@@ -122,13 +140,14 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     }
 
     /// <summary>
-    /// Why the Compactor at <paramref name="exe"/> isn't the native build, or null when it is:
-    /// a .NET build has its code in a .dll of the same name beside it.
+    /// Why the Compactor at <paramref name="exe"/> isn't the native build, or null when it is.
+    /// Judged by the exe itself, so a .NET build passes neither with its .dll beside it nor
+    /// without (one left behind by an upgrade, say), nor as a single file.
     /// </summary>
     internal static string? NotNative(string exe) =>
-        File.Exists(Path.ChangeExtension(exe, ".dll")) || File.Exists(Path.ChangeExtension(exe, ".runtimeconfig.json"))
-            ? "this DiskTray.Compactor.exe is a development build, which isn't safe to run as admin. Install DiskTray from a release to compact"
-            : null;
+        NativeExe.IsNativeAot(exe) && !File.Exists(Path.ChangeExtension(exe, ".dll"))
+            ? null
+            : "this DiskTray.Compactor.exe isn't the native build DiskTray releases, so it isn't safe to run as admin. Install DiskTray from a release to compact";
 
     /// <summary>
     /// Creates the pipe. Before the Compactor starts, and only once, so nothing else can be on
@@ -156,7 +175,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     internal void Listen(int clientId)
     {
         var pipe = _pipe ?? throw new InvalidOperationException("The pipe isn't open.");
-        _listening = true;
+        _state = PipeState.Listening;
         _ = Task.Run(() => ListenAsync(pipe, clientId));
     }
 
@@ -190,7 +209,11 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         }
     }
 
-    public void Dispose() => Close();
+    public void Dispose()
+    {
+        Close();
+        _process?.Dispose();
+    }
 
     private async Task ListenAsync(NamedPipeServerStream pipe, int clientId)
     {
@@ -203,7 +226,6 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
             if (!NativeMethods.GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint client) || client != clientId)
             {
                 Log.Info($"Something other than the Compactor ({client}) connected to its pipe; hanging up");
-                _hungUp = true;
                 pipe.Disconnect();
                 return;
             }
@@ -213,7 +235,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
                 _writer = new StreamWriter(pipe) { AutoFlush = true, NewLine = "\n" };
             }
 
-            _connected = true;
+            _state = PipeState.Connected;
 
             using var reader = new StreamReader(pipe);
             while (await reader.ReadLineAsync() is { } line)
@@ -247,7 +269,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         }
         finally
         {
-            _hungUp = true;
+            _state = PipeState.Ended;
         }
     }
 
@@ -255,6 +277,9 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     {
         using var me = WindowsIdentity.GetCurrent();
         var security = new PipeSecurity();
+        // Owned by this account, which the Compactor checks is the one on the other end,
+        // even when DiskTray runs as admin (whose files are owned by Administrators by default).
+        security.SetOwner(me.User!);
         security.AddAccessRule(new PipeAccessRule(me.User!, PipeAccessRights.FullControl, AccessControlType.Allow));
         // ReadWrite alone lacks what a client opening for writing asks for (FILE_APPEND_DATA,
         // which is CreateNewInstance on a pipe). The pipe allows one instance, which is this one.

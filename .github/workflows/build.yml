@@ -53,10 +53,11 @@ jobs:
           if ("v$version" -ne $env:GITHUB_REF_NAME) { throw "Tag $env:GITHUB_REF_NAME doesn't match Version $version in Directory.Build.props" }
       - name: Publish
         # The Compactor is compiled ahead of time (NativeAOT), which needs this Windows
-        # runner's C++ build tools.
+        # runner's C++ build tools. The run number makes each build's file versions higher
+        # than the last (see Directory.Build.props).
         run: |
-          dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained -o artifacts/publish
-          dotnet publish src/DiskTray.Compactor -c Release -r win-x64 -o artifacts/publish
+          dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained -o artifacts/publish -p:BuildNumber=${{ github.run_number }}
+          dotnet publish src/DiskTray.Compactor -c Release -r win-x64 -o artifacts/publish -p:BuildNumber=${{ github.run_number }}
       - name: Test the native Compactor
         # The Windows tests run the .NET build; these run the NativeAOT exe that ships, so a
         # problem only it has (trimming, generated JSON, loading Windows' DLLs) shows here.
@@ -74,40 +75,79 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release download --repo $env:GITHUB_REPOSITORY --pattern '*.msi' --output "$env:RUNNER_TEMP\earlier.msi"
       - name: Install, upgrade and uninstall the MSI
-        # On this throwaway runner only. Checks the latest release installs to Program
-        # Files, that this build upgrades it, that the installed Compactor passes
-        # DiskTray's own checks before it runs as admin, and that uninstalling takes it all
-        # away.
+        # On this throwaway runner only. Installs the latest release; checks that a clean up
+        # compacting stops an upgrade and an uninstall without changing anything, and that
+        # DiskTray starts again after; upgrades to this build, checking every file is this
+        # build's and the user's settings stay; checks the installed Compactor passes
+        # DiskTray's own checks before it runs as admin; and uninstalls, closing DiskTray and
+        # taking it all away, settings included.
         shell: pwsh
         env:
           DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
         run: |
-          function Msi([string] $action, [string] $msi, [string] $log) {
+          function Msi([string] $action, [string] $msi, [string] $log, [int] $expect = 0) {
             $p = Start-Process msiexec.exe -ArgumentList "$action `"$msi`" /qn /l*v `"$env:RUNNER_TEMP\$log`"" -Wait -PassThru
-            if ($p.ExitCode -ne 0) {
+            if ($p.ExitCode -ne $expect) {
               # The action that failed, and Windows Installer's own error messages.
               Select-String -Path "$env:RUNNER_TEMP\$log" -Pattern 'Return value 3' -Context 40,0 | Select-Object -First 1 | ForEach-Object { $_.Context.PreContext; $_.Line }
               Select-String -Path "$env:RUNNER_TEMP\$log" -Pattern '-- Error \d+|Note: 1: (?!1402|2205|2228|1725)\d+' | ForEach-Object Line
-              throw "msiexec $action $msi exited with $($p.ExitCode)"
+              throw "msiexec $action $msi exited with $($p.ExitCode), not $expect"
             }
           }
+          function Did([string] $log, [string] $action) { Select-String -Path "$env:RUNNER_TEMP\$log" -Pattern "Doing action: $action\b" -Quiet }
           function Installed { @(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'DiskTray').Count }
+          function Files([string] $root) {
+            $root = (Resolve-Path $root).Path.TrimEnd('\')
+            Get-ChildItem $root -Recurse -File | Where-Object Extension -ne '.pdb' |
+              ForEach-Object { [pscustomobject]@{ Path = $_.FullName.Substring($root.Length); Hash = (Get-FileHash $_.FullName).Hash } }
+          }
+          function Same($one, $other) { -not (Compare-Object @($one) @($other) -Property Path, Hash) }
           $folder = "$env:ProgramFiles\DiskTray"
+          $data = "$env:LOCALAPPDATA\DiskTray"
           $env:DISKTRAY_INSTALLED_COMPACTOR = "$folder\DiskTray.Compactor.exe"
+          $earlier = "$env:RUNNER_TEMP\earlier.msi"
           $msi = (Get-ChildItem artifacts/msi/*.msi).FullName
-          Msi /i "$env:RUNNER_TEMP\earlier.msi" install.log
+
+          Msi /i $earlier install.log
           if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The Compactor isn't in $folder" }
+          $released = Files $folder
+          New-Item -ItemType Directory -Force $data | Out-Null
+          Set-Content "$data\ci-marker.txt" 'Stands in for the user''s settings.'
+
+          # The installer knows a Compactor by its name, so any program by that name stands in.
+          $fake = New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\fake"
+          Copy-Item "$env:SystemRoot\System32\PING.EXE" "$fake\DiskTray.Compactor.exe"
+          $compacting = Start-Process "$fake\DiskTray.Compactor.exe" -ArgumentList '-n', '600', '127.0.0.1' -WindowStyle Hidden -PassThru
+          Msi /i $msi stopped-upgrade.log 1603
+          if (-not (Did stopped-upgrade.log StopWhileCompacting)) { throw "The upgrade didn't stop for the Compactor" }
+          if (-not (Did stopped-upgrade.log StartDiskTrayAfterError)) { throw "The stopped upgrade didn't start DiskTray again" }
+          if ((Installed) -ne 1) { throw "After the stopped upgrade, Settings › Apps lists DiskTray $(Installed) times" }
+          if (-not (Same $released (Files $folder))) { throw "The stopped upgrade changed what's installed" }
+          Msi /x $earlier stopped-uninstall.log 1603
+          if (-not (Did stopped-uninstall.log StopWhileCompacting)) { throw "The uninstall didn't stop for the Compactor" }
+          if (-not (Same $released (Files $folder))) { throw "The stopped uninstall changed what's installed" }
+          if (-not (Test-Path "$data\ci-marker.txt")) { throw "The stopped uninstall removed the user's settings" }
+          Stop-Process -Id $compacting.Id
+
           Msi /i $msi upgrade.log
-          if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The upgrade left no Compactor in $folder" }
           if ((Installed) -ne 1) { throw "After the upgrade, Settings › Apps lists DiskTray $(Installed) times" }
+          if (-not (Same (Files artifacts/publish) (Files $folder))) {
+            Compare-Object @(Files artifacts/publish) @(Files $folder) -Property Path, Hash | Format-Table | Out-String | Write-Host
+            throw "After the upgrade, what's installed isn't this build"
+          }
+          if (-not (Test-Path "$data\ci-marker.txt")) { throw "The upgrade removed the user's settings" }
           dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed"
           if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
-          # An upgrade starts DiskTray again for whoever ran it.
+
+          # Running, as it is for most people who uninstall, so closing it is part of it.
+          if (-not (Get-Process DiskTray -ErrorAction SilentlyContinue)) { Start-Process "$folder\DiskTray.exe" }
           Start-Sleep -Seconds 5
+          if (-not (Get-Process DiskTray -ErrorAction SilentlyContinue)) { throw "DiskTray didn't keep running before the uninstall" }
           Msi /x $msi uninstall.log
           if (Test-Path $folder) { throw "$folder is still there after uninstalling" }
           if ((Installed) -ne 0) { throw "DiskTray is still listed in Settings › Apps after uninstalling" }
           if (Get-Process DiskTray -ErrorAction SilentlyContinue) { throw "DiskTray is still running after uninstalling" }
+          if (Test-Path $data) { throw "Uninstalling left the user's settings in $data" }
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

@@ -232,11 +232,15 @@ user clicks **Clean up**.
     could change already" and "Pins each disk's path" below). A disk it would refuse is
     named in the result and left out; if it would refuse them all, it says so as its
     first word, and DiskTray stops nothing: Docker and WSL keep running.
-  - The Compactor reports at least once a second while it works. If it goes 2 minutes
-    without a word, DiskTray stops following it and says it can't tell whether compacting
+  - The Compactor reports at least once a second while it works (cancelling a compact
+    Windows stopped reporting on can take up to a minute). If it goes 2 minutes without
+    a word, DiskTray stops following it and says it can't tell whether compacting
     finished. The run isn't over, though, since the Compactor may still be compacting:
     Clean up stays locked, as after a restart (below), until it ends, and only then is
-    Docker started again if ticked, so the two never fight over its disk.
+    Docker started again if ticked, so the two never fight over its disk. The same goes
+    for a run that ends with an error part way. The lock is held from the run's start
+    to the Compactor's end with no gap between, and a Clean up dialog opened before it
+    was taken can't start a second run.
 - **Docker Desktop 4.39 or later**, with the WSL 2 backend: stopping, starting and asking
   about it use its `docker desktop` commands (added in 4.37, generally available in 4.39).
 - **Exiting during a run.** Exit asks first while the run prunes (nothing gets
@@ -352,12 +356,13 @@ General.
   WSL itself, without admin, and starts Docker again afterwards, so Docker never runs
   elevated. Its exit code is 0 when every disk was compacted, 1 when some weren't, 2
   when cancelled, 3 when it refused every disk before anything was stopped, 64 for
-  arguments it doesn't take and 65 when there's no app to talk to.
+  arguments it doesn't take, 65 when there's no app to talk to and 70 when something
+  went wrong that it didn't expect (it reports that as a failure first).
   - **Talking to the app.** Over a named pipe with a fresh random name that the app
     creates before starting it (first instance only, so nothing else can take the
     name; only the user and Administrators can connect, never over the network), and
-    the app checks that the process on the other end is the one it started. Once it has
-    connected, the pipe closing (not the process ending) means it's gone, so its last
+    the app checks that the process on the other end is the one it started. The app
+    makes itself the pipe's owner. Once it has connected, the pipe closing (not the process ending) means it's gone, so its last
     status is always read.
     The Compactor sends status and log lines; the app sends "go" or "cancel". The
     Compactor's end is opened for overlapped I/O: on a handle opened without it, Windows
@@ -371,7 +376,9 @@ General.
     file), so the Compactor only compacts a disk the account that asked could write to
     itself. It checks with the token of the DiskTray on the other end of the pipe, which
     runs without admin: acting as that account, it opens the file for writing, without
-    changing it. It opens the handle it already has on the file again, never the path,
+    changing it. Windows names that process by its ID, which another process can be
+    given once it ends, so the account found must also be the pipe's owner; a process
+    that took over the ID (a service, say) is refused. It opens the handle it already has on the file again, never the path,
     since a path can lead elsewhere for the user than for an admin process (each has its
     own drive letters). A disk only an admin can change (another account's, or a virtual
     machine's) is refused, and so is everything when that account can't be told. It's
@@ -379,11 +386,18 @@ General.
     counts as a yes, since the permission is checked first), and again while the disk is
     held for compacting. Reading another account's DiskTray can need the debug privilege,
     which is turned on only for that and off again straight after.
-  - **Only from an admin-only folder.** Before the admin prompt, the app checks that it
-    can't change the Compactor itself: write, replace or re-permission the exe or
-    anything in its folder, add a file there (a planted DLL would load into it), or move
-    the folder or one above it. It tests this by opening each with those rights and
-    closing again. The installer's `Program Files\DiskTray` passes. A copy in
+  - **Only from an admin-only folder.** Before the admin prompt, the app checks that
+    nothing without admin rights can change the Compactor itself: write, replace or
+    re-permission the exe or anything in its folder, add a file there (a planted DLL
+    would load into it), or move the folder or one above it. It tests what it can do
+    itself by opening each with those rights and closing again, then reads each one's
+    owner and permissions for what any other account could: only SYSTEM,
+    Administrators and TrustedInstaller may own one or be let change it. First, the
+    exe's real path must be the path DiskTray runs it by, so no folder on the way is a
+    junction or other link, and no drive letter of the user's own (`subst`) or network
+    share is in it; and nothing in its folder may be a link. Otherwise the checks would
+    read where a link leads now, and it could be pointed elsewhere while the prompt is
+    up. The installer's `Program Files\DiskTray` passes. A copy in
     `%LOCALAPPDATA%` doesn't, because anything running as the user could swap it before
     the prompt is answered, so Clean up still prunes there but won't compact. DiskTray
     itself running with admin rights in effect won't compact either, whether it was
@@ -396,9 +410,11 @@ General.
     that load a profiler or startup hook. The NativeAOT exe has neither, and loads
     `virtdisk.dll`, `kernel32.dll` and `advapi32.dll` only from System32. Windows still
     looks for some DLLs it loads at start next to the exe first, which is one reason
-    the folder check above matters. The app won't start a Compactor that has a
-    `DiskTray.Compactor.dll` or `.runtimeconfig.json` beside it (a .NET build, as the dev
-    MSI has), so a development build never runs as admin.
+    the folder check above matters. The app reads the exe itself: it only starts one
+    that exports `DotNetRuntimeDebugHeader`, as NativeAOT exes do and the hosts that start
+    the .NET runtime (framework-dependent or single-file) don't, and that has no
+    `DiskTray.Compactor.dll` beside it. So a development build never runs as admin, with
+    its `.dll` or without. The WiX build makes the same check before it packs a release.
   - **Pins each disk's path while compacting it.** The disk and the folders above it can
     usually be changed by the user, so the disk and each folder are held open without
     delete sharing while that disk is checked and compacted (none can be renamed,
@@ -406,10 +422,13 @@ General.
     has another name (a hard link), or it isn't where its path says (an 8.3 short name,
     or a drive letter made for a folder with `subst`, is refused that way). A disk reached
     through a junction, or through a volume mounted in a folder (both reparse points, as
-    when a disk is moved to another drive that way), isn't compacted.
-  - It waits up to a minute for WSL to let go of each disk after the shutdown, and
-    reports a disk that stays in use (something started WSL again) without compacting
-    it.
+    when a disk is moved to another drive that way), isn't compacted. Its sizes before
+    and after are read through the held file, never its path. Windows' virtual disk
+    service opens the disk by its path, so once it has, the held file is checked again
+    for having become a link or gained a name. Paths longer than 260 characters work.
+  - It waits up to a minute for WSL to let go of each disk after the shutdown, trying
+    to hold it once a second, and reports a disk that stays in use (something started
+    WSL again) without compacting it.
 - **Settings** are stored as JSON under `%LOCALAPPDATA%\DiskTray\`, the last usage
   readings in `usage.json` (kept for 30 days after a disk was last detected, so
   switching detection off for a while doesn't lose them; only written when a reading
@@ -442,17 +461,22 @@ General.
   As admin, on an upgrade or uninstall, it also closes DiskTray running for other
   signed-in users: it sends a close message and ends it if it hasn't gone after 15 s.
   Windows doesn't pass that message to other sessions, so in practice their copies are
-  ended, and may leave a stale tray icon until hovered. While a Compactor is running
-  (a disk is being compacted), the install stops with a message to try again once it's
-  done, rather than end it or replace it part way. An upgrade has closed DiskTray by
-  then (it's closed first, so its files can be replaced), so it's started again just
-  before the install stops, to follow the compact and say when it's done. The user's
-  data and other users' copies are left alone: those steps only run once the install is
-  under way. An upgrade puts the new files in place before it removes the old version,
-  within the same install, so one that fails leaves the old version as it was. Files are
-  replaced by version, which every release raises. A rebuilt MSI of the same version
-  takes the installed one's place in Settings › Apps rather than installing beside it,
-  but leaves files of the same version as they were.
+  ended, and may leave a stale tray icon until hovered. While a Compactor is running in
+  any user's session (a clean up is compacting a disk, or about to), the install stops
+  with a message to try again once it's done, rather than end it or replace it part
+  way. The user's data and other users' copies are left alone: those steps only run once
+  the install is under way. An upgrade or repair that closed DiskTray and then doesn't
+  finish (stopped that way, cancelled, or failed and rolled back) starts it again as it
+  ends, so it can follow a compact and say when it's done. An upgrade puts the new files
+  in place before it removes the old version, within the same install, so one that
+  fails leaves the old version as it was. Files are replaced by version: each build's
+  exes and DLLs get a fourth version number that only grows (the GitHub Actions run
+  number, 0 for a local build), so a release replaces a dev MSI's files of the same
+  version, and each build replaces the one before. A dev MSI over a release of the same
+  version keeps the release's (newer) exes but adds the .NET Compactor's `.dll`, which
+  the app then refuses, so uninstall a release before trying a dev MSI. A rebuilt MSI
+  of the same version takes the installed one's place in Settings › Apps rather than
+  installing beside it.
 
   Releases come from the GitHub Actions workflow, since NativeAOT for Windows needs
   Windows and the C++ build tools. It runs the tests (Core on Linux; everything,
@@ -461,8 +485,12 @@ General.
   `Version` in `Directory.Build.props` it publishes a release with both attached. The
   WiX build refuses a Compactor that isn't the native one. Before building the MSI, the
   Compactor exe tests run again against the native exe that ships; then the runner
-  installs the latest release's MSI, upgrades it to this build, checks the installed
-  Compactor passes the app's checks as an everyday token, and uninstalls it. Its actions are
+  installs the latest release's MSI; checks that a running Compactor (any program by
+  that name) stops an upgrade and an uninstall without changing a file or the user's
+  settings, and that DiskTray is started again; upgrades it to this build and checks
+  every installed file is this build's and the settings stayed; checks the installed
+  Compactor passes the app's checks as an everyday token; and, with DiskTray running,
+  uninstalls it, checking DiskTray was closed and everything is gone, the settings too. Its actions are
   pinned to commits, not tags. `scripts/build-msi.sh` builds a `-dev` MSI from WSL for
   trying the installer, with a plain .NET Compactor that the app won't run (see
   "Native, not .NET"), so it can't compact (WiX only runs on Windows, so it uses the
@@ -495,12 +523,17 @@ General.
   `global.json`). `tests/DiskTray.Core.Tests` runs anywhere. `tests/DiskTray.Windows.Tests`
   runs only on Windows (`dotnet test` elsewhere leaves it out) and covers what runs as
   admin, on real files, pipes and processes in temp folders: the pipe between the app
-  and the Compactor (and who may connect to it), the path hold (links, junctions, hard
-  links, short names), the account check (including an admin's everyday token against
-  a file only admins can change, and a disk WSL has open), the in-use check, the folder
-  check (refusing a folder anyone can change, passing one only admins can, and telling a
-  .NET Compactor from the native one), a compact that gives back the space a test VHDX
-  held after its data was cleared, and the Compactor exe itself: compacting, a dry run,
+  and the Compactor (and who may connect to it, and closing it under a waiting read),
+  the path hold (links, junctions, hard links, short names, long paths, a disk in use),
+  the account check (including an admin's everyday token, at Medium integrity, against
+  a file only admins can change, a disk WSL has open, a pipe owned by another account,
+  and the debug privilege being off again after use), the in-use check, the folder
+  check (refusing a folder anyone can change, a junction to a protected folder, a link
+  inside it and write access for another account; passing one only admins can; how
+  DiskTray itself runs; telling a .NET Compactor from the native one), a compact that
+  gives back the space a test VHDX held after its data was cleared, a long path, a
+  compact Windows stops reporting on (with a stand-in for its virtual disk API),
+  `HiddenProcess`'s timeouts, and the Compactor exe itself: compacting, a dry run,
   refusing every disk before it's ready, carrying on when the app goes after "go", and
   quitting on bad arguments, no app, or the app going away. Those run against the
   framework-dependent build, and in the GitHub Actions installer job again against the

@@ -2,14 +2,12 @@ namespace DiskTray.Core.Compact;
 
 /// <summary>
 /// Whether a disk file is open, which for a WSL or Docker disk means WSL is using it. The
-/// app's idle check and the Compactor both use this, so they read the same errors the same
-/// way.
+/// app's idle check uses this; the Compactor reads the same errors through
+/// <see cref="WindowsError.IsSharing"/>.
 /// </summary>
 public static class DiskOpenCheck
 {
     private const int Win32Facility = unchecked((int)0x8007_0000);
-    private const int ErrorSharingViolation = 32;
-    private const int ErrorLockViolation = 33;
 
     /// <summary>
     /// Tries opening the file for itself alone, then closes it. True if something else has it
@@ -38,7 +36,7 @@ public static class DiskOpenCheck
         }
     }
 
-    /// <summary>A Windows sharing or lock violation: another handle on the file doesn't allow this one.</summary>
+    /// <summary>A Windows sharing or lock violation, as an exception's HRESULT: another handle on the file doesn't allow this one.</summary>
     public static bool IsSharingError(int hresult) =>
-        (hresult & unchecked((int)0xFFFF_0000)) == Win32Facility && (hresult & 0xFFFF) is ErrorSharingViolation or ErrorLockViolation;
+        (hresult & unchecked((int)0xFFFF_0000)) == Win32Facility && WindowsError.IsSharing(hresult & 0xFFFF);
 }

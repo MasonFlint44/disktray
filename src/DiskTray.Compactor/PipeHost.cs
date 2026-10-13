@@ -93,32 +93,37 @@ internal sealed class PipeHost : ICompactorHost, IDisposable
         return look is null ? problem : Refusal(_user.CanWrite(look.File));
     }
 
-    public long? FileSize(string path)
+    public DiskHold Hold(string path, bool dryRun)
     {
-        try
+        if (_user is null)
         {
-            var file = new FileInfo(path);
-            return file.Exists ? file.Length : null;
+            return new DiskHold(null, Refusal(null));
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
 
-    // Can't be told counts as free: the compact will say what's wrong.
-    public bool InUse(string path) => DiskOpenCheck.InUse(path, out _) == true;
-
-    public string? CompactDisk(string path, Action<int> progress)
-    {
-        using var hold = PathHold.Take(path, out string? problem);
+        bool inUse = false;
+        var hold = dryRun ? PathHold.Look(path, out string? problem) : PathHold.Take(path, out problem, out inUse);
         if (hold is null)
         {
-            return problem;
+            return new DiskHold(null, problem, inUse);
         }
 
         // Checked again while held, on the held file, so it's the file that gets compacted.
-        return Refusal(_user?.CanWrite(hold.File)) ?? VirtualDisk.Compact(path, progress);
+        if (Refusal(_user.CanWrite(hold.File)) is { } refusal)
+        {
+            hold.Dispose();
+            return new DiskHold(null, refusal);
+        }
+
+        return new DiskHold(new HeldDisk(path, hold));
+    }
+
+    private sealed class HeldDisk(string path, PathHold hold) : IHeldDisk
+    {
+        public long? Size => hold.Size;
+
+        public string? Compact(Action<int> progress) => VirtualDisk.Compact(path, hold, progress);
+
+        public void Dispose() => hold.Dispose();
     }
 
     /// <summary>Why a disk isn't compacted, from what the account check said, or null when it can be.</summary>

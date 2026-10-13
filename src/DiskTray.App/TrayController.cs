@@ -42,6 +42,9 @@ internal sealed class TrayController : IDisposable
     private CleanupWindow? _cleanupWindow;
     private CleanupProgress? _cleanupProgress;
     private CancellationTokenSource? _cleanupCancel;
+
+    // Held from a clean up's start until its Compactor has ended, the wait included.
+    private readonly CleanupTurn _cleanupTurn = new();
     private AppSettings _settings;
     private AlertState _alerts = AlertStateFile.Load();
 
@@ -78,12 +81,16 @@ internal sealed class TrayController : IDisposable
 
     public async Task StartAsync()
     {
-        // The run record first, so a clean up left halfway keeps the first refresh away from WSL too.
-        var finishing = FinishInterruptedCleanupAsync();
-        await RefreshAsync();
-        _timer.Start();
-        _reminderTimer.Start();
-        await finishing;
+        // The run record first, so a clean up left halfway keeps the first refresh away from WSL
+        // too, and no clean up starts until it's finished.
+        _cleanupTurn.TryTake();
+        await _cleanupTurn.EndAsync(true, FinishInterruptedCleanupAsync, async () =>
+        {
+            await RefreshAsync();
+            _timer.Start();
+            _reminderTimer.Start();
+        });
+        UpdateCleanupStatus();
     }
 
     /// <summary>
@@ -99,9 +106,12 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        _cleanupProgress = new CleanupProgress(CleanupStep.FinishingEarlierRun, marker.StoppedAnswering
-            ? "Waiting for the Compactor to end"
-            : "Finishing the clean up that was running when DiskTray closed");
+        _cleanupProgress = new CleanupProgress(CleanupStep.FinishingEarlierRun, marker switch
+        {
+            { Failed: true } => "Finishing the clean up that stopped with an error",
+            { StoppedAnswering: true } => "Waiting for the Compactor to end",
+            _ => "Finishing the clean up that was running when DiskTray closed",
+        });
         UpdateCleanupStatus();
         try
         {
@@ -335,7 +345,7 @@ internal sealed class TrayController : IDisposable
 
     private async void OpenCleanup()
     {
-        if (_cleanupProgress is not null)
+        if (_cleanupProgress is not null || _cleanupTurn.Taken)
         {
             // One at a time; the flyout shows how the current one is going.
             ShowFlyout();
@@ -382,6 +392,15 @@ internal sealed class TrayController : IDisposable
     /// <param name="window">The Clean up dialog, left open while the admin prompt is up.</param>
     private async Task RunCleanupAsync(CleanupRequest request, CleanupWindow window)
     {
+        // The dialog may have been opened before an earlier run's wait began.
+        if (!_cleanupTurn.TryTake())
+        {
+            Log.Info("Didn't start a clean up: one is still going");
+            window.CloseIfOpen();
+            ShowFlyout();
+            return;
+        }
+
         using var launcher = new CompactorLauncher(window.Handle);
         _cleanupCancel = new CancellationTokenSource();
         bool toldCompacting = false;
@@ -423,6 +442,9 @@ internal sealed class TrayController : IDisposable
         {
             Log.Error("Clean up failed", e);
             Notifier.ShowCleanup("Clean up didn't finish", e.Message);
+            // Docker or WSL may be stopped, and the Compactor running: finished like a run
+            // DiskTray closed during, which starts Docker again if asked.
+            keep = saved is null ? null : saved with { Failed = true };
         }
         finally
         {
@@ -443,12 +465,9 @@ internal sealed class TrayController : IDisposable
             UpdateCleanupStatus();
         }
 
-        await RefreshAsync();
-        if (keep is not null)
-        {
-            // Its Compactor may still be compacting: wait for it, as after a restart.
-            await FinishInterruptedCleanupAsync();
-        }
+        // Its Compactor may still be compacting: the turn lasts until it has ended, as after a restart.
+        await _cleanupTurn.EndAsync(keep is not null, FinishInterruptedCleanupAsync, RefreshAsync);
+        UpdateCleanupStatus();
     }
 
     private void UpdateCleanupStatus()
@@ -459,7 +478,7 @@ internal sealed class TrayController : IDisposable
             if (icon.ContextMenu?.Items.OfType<MenuItem>().FirstOrDefault(m => Equals(m.Tag, CleanupMenuTag)) is { } item)
             {
                 item.Header = _cleanupProgress?.CanCancel == true ? "Cancel clean up" : "Clean up…";
-                item.IsEnabled = _cleanupProgress is null || _cleanupProgress.CanCancel;
+                item.IsEnabled = _cleanupProgress?.CanCancel == true || (_cleanupProgress is null && !_cleanupTurn.Taken);
             }
         }
     }

@@ -1,6 +1,9 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
 using System.Security.Principal;
+using DiskTray.Compactor;
 using DiskTray.Core.Compact;
 using Microsoft.Win32.SafeHandles;
 
@@ -81,26 +84,17 @@ internal static class Admin
 }
 
 /// <summary>Makes real (empty) VHDX files with Windows' virtual disk API, for compacting.</summary>
-internal static partial class TestDisk
+internal static unsafe partial class TestDisk
 {
-    private const uint VhdxDevice = 3;
-    private static readonly Guid MicrosoftVendor = new("EC984AEC-A0F9-47e9-901F-71415A66345B");
-
     /// <summary>Creates an expandable VHDX at <paramref name="path"/>, 64 MiB unless said otherwise.</summary>
     public static void Create(string path, long bytes = 64L << 20)
     {
-        var type = new StorageType { DeviceId = VhdxDevice, VendorId = MicrosoftVendor };
+        var type = new VirtualDisk.StorageType { DeviceId = VirtualDisk.VhdxDevice, VendorId = VirtualDisk.MicrosoftVendor };
         var parameters = new CreateParameters { Version = 2, MaximumSize = (ulong)bytes };
-        uint error = CreateVirtualDisk(ref type, path, 0, 0, 0, 0, ref parameters, 0, out var handle);
+        // By pointer: the structs are the Compactor's, which LibraryImport won't marshal from another assembly.
+        uint error = CreateVirtualDisk(&type, path, 0, 0, 0, 0, &parameters, 0, out var handle);
         handle.Dispose();
         Assert.True(error == 0, $"CreateVirtualDisk failed with error {error}");
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct StorageType
-    {
-        public uint DeviceId;
-        public Guid VendorId;
     }
 
     /// <summary>CREATE_VIRTUAL_DISK_PARAMETERS, version 2. The union after Version is 8-byte aligned.</summary>
@@ -117,20 +111,20 @@ internal static partial class TestDisk
         public nint ParentPath;
         public nint SourcePath;
         public int OpenFlags;
-        public StorageType ParentVirtualStorageType;
-        public StorageType SourceVirtualStorageType;
+        public VirtualDisk.StorageType ParentVirtualStorageType;
+        public VirtualDisk.StorageType SourceVirtualStorageType;
         public Guid ResiliencyGuid;
     }
 
     [LibraryImport("virtdisk.dll", StringMarshalling = StringMarshalling.Utf16)]
     private static partial uint CreateVirtualDisk(
-        ref StorageType type,
+        VirtualDisk.StorageType* type,
         string path,
         uint accessMask,
         nint securityDescriptor,
         uint flags,
         uint providerSpecificFlags,
-        ref CreateParameters parameters,
+        CreateParameters* parameters,
         nint overlapped,
         out SafeFileHandle handle);
 }
@@ -158,20 +152,23 @@ internal static class Statuses
 }
 
 /// <summary>
-/// This process's token with Administrators turned into a deny-only group, as Windows does
-/// for an admin's everyday (not "Run as administrator") token, which is how DiskTray itself
-/// runs for most people.
+/// This process's token with Administrators turned into a deny-only group and at Medium
+/// integrity, as Windows makes an admin's everyday (not "Run as administrator") token, which
+/// is how DiskTray itself runs for most people.
 /// </summary>
 internal static unsafe partial class NonAdminToken
 {
     private const uint TokenDuplicate = 0x2;
     private const uint TokenAssignPrimary = 0x1;
     private const uint TokenQuery = 0x8;
+    private const uint TokenAdjustDefault = 0x80;
     private const uint DisableMaxPrivilege = 0x1;
+    private const int TokenIntegrityLevel = 25;
+    private const uint GroupIntegrity = 0x20;
 
     public static SafeAccessTokenHandle Create()
     {
-        Assert.True(OpenProcessToken(-1, TokenDuplicate | TokenAssignPrimary | TokenQuery, out var own), $"OpenProcessToken failed ({Marshal.GetLastPInvokeError()})");
+        Assert.True(OpenProcessToken(-1, TokenDuplicate | TokenAssignPrimary | TokenQuery | TokenAdjustDefault, out var own), $"OpenProcessToken failed ({Marshal.GetLastPInvokeError()})");
         using (own)
         {
             var admins = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
@@ -183,8 +180,24 @@ internal static unsafe partial class NonAdminToken
                 Assert.True(
                     CreateRestrictedToken(own, DisableMaxPrivilege, 1, &disable, 0, 0, 0, 0, out var restricted),
                     $"CreateRestrictedToken failed ({Marshal.GetLastPInvokeError()})");
+                MediumIntegrity(restricted);
                 return restricted;
             }
+        }
+    }
+
+    /// <summary>Lowers the token to Medium integrity, as an everyday token is; lowering needs no privilege.</summary>
+    private static void MediumIntegrity(SafeAccessTokenHandle token)
+    {
+        var medium = new SecurityIdentifier("S-1-16-8192");
+        byte[] sid = new byte[medium.BinaryLength];
+        medium.GetBinaryForm(sid, 0);
+        fixed (byte* sidPointer = sid)
+        {
+            var label = new SidAndAttributes { Sid = (nint)sidPointer, Attributes = GroupIntegrity };
+            Assert.True(
+                SetTokenInformation(token, TokenIntegrityLevel, &label, (uint)(sizeof(SidAndAttributes) + sid.Length)),
+                $"SetTokenInformation failed ({Marshal.GetLastPInvokeError()})");
         }
     }
 
@@ -198,6 +211,10 @@ internal static unsafe partial class NonAdminToken
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool OpenProcessToken(nint process, uint access, out SafeAccessTokenHandle token);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetTokenInformation(SafeAccessTokenHandle token, int infoClass, void* info, uint length);
 
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -218,9 +235,8 @@ internal static unsafe partial class NonAdminToken
 /// to as a raw disk. Only ever the disk this attached: its device path comes from its own
 /// handle, and its size is checked before anything is written.
 /// </summary>
-internal sealed partial class AttachedTestDisk : IDisposable
+internal sealed unsafe partial class AttachedTestDisk : IDisposable
 {
-    private const uint VhdxDevice = 3;
     private const uint AccessAttachDetachInfo = 0x000E_0000;
     private const uint AttachNoDriveLetter = 0x2;
     private const uint GenericReadWrite = 0xC000_0000;
@@ -228,16 +244,15 @@ internal sealed partial class AttachedTestDisk : IDisposable
     private const uint OpenExisting = 3;
     private const uint DiskGetLengthInfo = 0x0007_405C;
     private const uint DiskSetAttributes = 0x0007_C0F4;
-    private static readonly Guid MicrosoftVendor = new("EC984AEC-A0F9-47e9-901F-71415A66345B");
 
     private readonly SafeFileHandle _virtualDisk;
     private readonly SafeFileHandle _device;
 
     public AttachedTestDisk(string vhdx, long expectedBytes)
     {
-        var type = new StorageType { DeviceId = VhdxDevice, VendorId = MicrosoftVendor };
-        var open = new OpenParameters { Version = 1, RWDepth = 1 };
-        uint error = OpenVirtualDisk(ref type, vhdx, AccessAttachDetachInfo, 0, ref open, out _virtualDisk);
+        var type = new VirtualDisk.StorageType { DeviceId = VirtualDisk.VhdxDevice, VendorId = VirtualDisk.MicrosoftVendor };
+        var open = new VirtualDisk.OpenParameters { Version = 1, RWDepth = 1 };
+        uint error = OpenVirtualDisk(&type, vhdx, AccessAttachDetachInfo, 0, &open, out _virtualDisk);
         Assert.True(error == 0, $"OpenVirtualDisk failed ({error})");
 
         var attach = new AttachParameters { Version = 1 };
@@ -284,20 +299,6 @@ internal sealed partial class AttachedTestDisk : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct StorageType
-    {
-        public uint DeviceId;
-        public Guid VendorId;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct OpenParameters
-    {
-        public int Version;
-        public uint RWDepth;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
     private struct AttachParameters
     {
         public int Version;
@@ -322,7 +323,7 @@ internal sealed partial class AttachedTestDisk : IDisposable
     }
 
     [LibraryImport("virtdisk.dll", StringMarshalling = StringMarshalling.Utf16)]
-    private static partial uint OpenVirtualDisk(ref StorageType type, string path, uint access, uint flags, ref OpenParameters parameters, out SafeFileHandle handle);
+    private static partial uint OpenVirtualDisk(VirtualDisk.StorageType* type, string path, uint access, uint flags, VirtualDisk.OpenParameters* parameters, out SafeFileHandle handle);
 
     [LibraryImport("virtdisk.dll")]
     private static partial uint AttachVirtualDisk(SafeFileHandle handle, nint securityDescriptor, uint flags, uint providerSpecificFlags, ref AttachParameters parameters, nint overlapped);
@@ -347,4 +348,83 @@ internal sealed partial class AttachedTestDisk : IDisposable
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool FlushFileBuffers(SafeFileHandle handle);
+}
+
+/// <summary>Junctions, which any account can make; they need neither admin rights nor Developer Mode.</summary>
+internal static class Junction
+{
+    /// <summary>Makes <paramref name="link"/> a junction to <paramref name="target"/>, and returns it.</summary>
+    public static string Create(string link, string target)
+    {
+        using var mklink = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "cmd.exe"), ["/c", "mklink", "/J", link, target]) { CreateNoWindow = true, UseShellExecute = false })!;
+        mklink.WaitForExit();
+        Assert.Equal(0, mklink.ExitCode);
+        return link;
+    }
+}
+
+/// <summary>This process's privileges, and a process's permissions, for the debug privilege test.</summary>
+internal static unsafe partial class Privileges
+{
+    private const int TokenPrivilegesClass = 3;
+    private const uint TokenQuery = 0x8;
+    private const uint Enabled = 0x2;
+    private const int KernelObject = 6;
+    private const uint DaclSecurityInformation = 0x4;
+
+    /// <summary>Whether SeDebugPrivilege is on in this process's token.</summary>
+    public static bool DebugIsOn()
+    {
+        Assert.True(LookupPrivilegeValue(null, "SeDebugPrivilege", out long debug));
+        Assert.True(OpenProcessToken(-1, TokenQuery, out var token), $"OpenProcessToken failed ({Marshal.GetLastPInvokeError()})");
+        using (token)
+        {
+            GetTokenInformation(token, TokenPrivilegesClass, null, 0, out int size);
+            var buffer = new byte[size];
+            fixed (byte* info = buffer)
+            {
+                Assert.True(GetTokenInformation(token, TokenPrivilegesClass, info, size, out _), $"GetTokenInformation failed ({Marshal.GetLastPInvokeError()})");
+                // TOKEN_PRIVILEGES: a count, then 12-byte entries of a LUID and its attributes.
+                uint count = *(uint*)info;
+                for (int i = 0; i < count; i++)
+                {
+                    byte* entry = info + 4 + (12 * i);
+                    if (*(long*)entry == debug)
+                    {
+                        return (*(uint*)(entry + 8) & Enabled) != 0;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Gives <paramref name="process"/> permissions that let no one in, so only the debug privilege opens it.</summary>
+    public static void LockOut(Process process)
+    {
+        var none = new RawAcl(GenericAcl.AclRevision, 0);
+        byte[] acl = new byte[none.BinaryLength];
+        none.GetBinaryForm(acl, 0);
+        fixed (byte* dacl = acl)
+        {
+            uint error = SetSecurityInfo(process.SafeHandle, KernelObject, DaclSecurityInformation, 0, 0, (nint)dacl, 0);
+            Assert.True(error == 0, $"SetSecurityInfo failed ({error})");
+        }
+    }
+
+    [LibraryImport("advapi32.dll", EntryPoint = "LookupPrivilegeValueW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool LookupPrivilegeValue(string? system, string name, out long luid);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool OpenProcessToken(nint process, uint access, out SafeAccessTokenHandle token);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetTokenInformation(SafeAccessTokenHandle token, int infoClass, byte* info, int length, out int returned);
+
+    [LibraryImport("advapi32.dll")]
+    private static partial uint SetSecurityInfo(SafeProcessHandle handle, int objectType, uint securityInfo, nint owner, nint group, nint dacl, nint sacl);
 }
