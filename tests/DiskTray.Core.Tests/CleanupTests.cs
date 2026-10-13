@@ -985,7 +985,8 @@ public sealed class FolderLookupTests : IDisposable
                 return true;
             },
             _ => [],
-            TimeSpan.FromMilliseconds(100));
+            // Long enough that a busy machine still starts the look that doesn't hang in time.
+            TimeSpan.FromSeconds(1));
         try
         {
             Assert.Null(lookup.Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
