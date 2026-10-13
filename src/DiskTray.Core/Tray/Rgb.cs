@@ -8,7 +8,8 @@ public readonly record struct Rgb(byte R, byte G, byte B)
     public static Rgb FromHex(string hex)
     {
         string digits = hex.StartsWith('#') ? hex[1..] : hex;
-        if (digits.Length != 6 || !uint.TryParse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint value))
+        // AllowHexSpecifier alone, since HexNumber also lets spaces in (" 12345").
+        if (digits.Length != 6 || !uint.TryParse(digits, NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out uint value))
         {
             throw new FormatException($"Expected a color like #RRGGBB, got '{hex}'.");
         }

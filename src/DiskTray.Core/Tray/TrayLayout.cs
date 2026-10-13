@@ -119,12 +119,35 @@ public static class TrayLayout
             || f.Id == snapshot.PrimaryDistroId
             || (f.Kind == DiskKind.WslDistro && !Detection.WslDistro.IsDockerOwnedName(f.Name) && f.ReclaimableBytes > 0));
 
-    /// <summary>The pinned files and paths on <paramref name="drive"/>, largest first, which get their own slices of it.</summary>
-    public static IReadOnlyList<TrayItem> ItemsOn(IEnumerable<TrayItem> items, DriveSpace drive) =>
-        items.Where(i => !i.IsDrive && i.Missing is null && i.File is not null
+    /// <summary>
+    /// The pinned files and paths on <paramref name="drive"/>, largest first, which get their
+    /// own slices of it. Each part of the drive is counted once, so the slices never add up
+    /// past what's used: a file pinned twice (as a detected disk and by its path) keeps its
+    /// first, and one inside a pinned folder is left to the folder.
+    /// </summary>
+    public static IReadOnlyList<TrayItem> ItemsOn(IEnumerable<TrayItem> items, DriveSpace drive)
+    {
+        var on = items.Where(i => !i.IsDrive && i.Missing is null && i.File is not null
                 && string.Equals(i.File.DriveRoot, drive.Root, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(i => i.File!.SizeBytes)
             .ToList();
+        var counted = new List<TrayItem>();
+        for (int i = 0; i < on.Count; i++)
+        {
+            var file = on[i].File!;
+            bool already = on.Where((_, j) => j != i).Any(other => Inside(file, other.File!))
+                || on.Take(i).Any(other => string.Equals(other.File!.Path, file.Path, StringComparison.OrdinalIgnoreCase));
+            if (!already)
+            {
+                counted.Add(on[i]);
+            }
+        }
+
+        return counted.OrderByDescending(i => i.File!.SizeBytes).ToList();
+
+        static bool Inside(DiskFile file, DiskFile folder) =>
+            folder.Kind == DiskKind.Folder
+            && file.Path.StartsWith(folder.Path.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>Everything on the drive that isn't free or one of <paramref name="files"/>.</summary>
     public static long OtherBytes(DriveSpace drive, IEnumerable<DiskFile> files) =>
@@ -216,8 +239,9 @@ public static class TrayLayout
     /// <summary>"C: 50 GiB free (11%)", plus "– below 15% warning" when low.</summary>
     internal static string FreeLine(DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
     {
-        string line = $"{drive.Label} {ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider)})";
-        return thresholds.Classify(drive) switch
+        var level = thresholds.Classify(drive);
+        string line = $"{drive.Label} {ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider, thresholds.FractionFor(level))})";
+        return level switch
         {
             AlertLevel.Critical => line + $" – below {ByteSize.FormatPercent(thresholds.CriticalFreeFraction, provider)} critical",
             AlertLevel.Warning => line + $" – below {ByteSize.FormatPercent(thresholds.WarningFreeFraction, provider)} warning",
@@ -258,6 +282,18 @@ public static class TrayLayout
             text = string.Join('\n', kept);
         }
 
-        return text.Length <= MaxToolTipLength ? text : text[..(MaxToolTipLength - 1)] + "…";
+        if (text.Length <= MaxToolTipLength)
+        {
+            return text;
+        }
+
+        // Never between the two halves of a character outside the BMP (an emoji in a name).
+        int cut = MaxToolTipLength - 1;
+        if (char.IsHighSurrogate(text[cut - 1]))
+        {
+            cut--;
+        }
+
+        return text[..cut] + "…";
     }
 }

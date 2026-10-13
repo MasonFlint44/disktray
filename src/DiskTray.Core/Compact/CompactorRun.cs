@@ -147,7 +147,7 @@ public sealed class CompactorRun(CompactorArgs args, ICompactorHost host)
         {
             if (waited >= InUseTimeout)
             {
-                return new DiskResult(disk, null, null, $"{disk} is still in use, so WSL or Docker must have started again.");
+                return new DiskResult(disk, null, null, $"{disk} is still in use: WSL or Docker may have started again, or something else (such as Disk Management, if it's attached there) has it open.");
             }
 
             host.Wait(PollInterval);

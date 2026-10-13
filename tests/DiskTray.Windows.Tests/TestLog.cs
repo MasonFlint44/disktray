@@ -8,8 +8,22 @@ namespace DiskTray.Windows.Tests;
 internal static class TestLog
 {
     [ModuleInitializer]
-    internal static void UseTempFile() =>
+    internal static void UseTempFile()
+    {
         Log.FilePath = Path.Combine(Path.GetTempPath(), "DiskTray.Tests-logs", $"disktray-{Environment.ProcessId}.log");
+        // What a failure needed from it is in its message by then.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try
+            {
+                File.Delete(Log.FilePath);
+                File.Delete(Log.FilePath + ".old");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+            }
+        };
+    }
 
     /// <summary>A failure message with the log's last lines, which say what a check found.</summary>
     public static string Explain(string? problem)

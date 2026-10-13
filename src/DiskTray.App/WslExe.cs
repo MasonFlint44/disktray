@@ -15,8 +15,23 @@ internal sealed class WslExe : IWslControl
     private static readonly Dictionary<string, string> Utf8 = new() { ["WSL_UTF8"] = "1" };
     private static readonly string ExePath = Path.Combine(Environment.SystemDirectory, "wsl.exe");
 
+    // Shared by every WslExe (refreshes have their own), so a clean up's shutdown can wait
+    // for a refresh's df that's already going, and keep any more out until the clean up ends.
+    private static readonly object DistroGate = new();
+    private static int _distroRuns;
+    private static bool _distrosKeptOut;
+
     // The last failure logged for each command, so one that keeps failing logs once.
     private readonly Dictionary<string, string> _lastFailure = [];
+
+    /// <summary>Lets commands run in distros again, once the clean up that shut WSL down is over.</summary>
+    public static void LetDistrosRun()
+    {
+        lock (DistroGate)
+        {
+            _distrosKeptOut = false;
+        }
+    }
 
     public IReadOnlySet<string>? RunningDistros()
     {
@@ -55,12 +70,51 @@ internal sealed class WslExe : IWslControl
         return inUse;
     }
 
-    public string? Run(string distro, IReadOnlyList<string> command) =>
-        Run(["--distribution", distro, "--exec", .. command]);
+    /// <summary>Runs the command in the distro, or returns null without running it while a clean up keeps distros quiet.</summary>
+    public string? Run(string distro, IReadOnlyList<string> command)
+    {
+        lock (DistroGate)
+        {
+            if (_distrosKeptOut)
+            {
+                return null;
+            }
 
-    /// <summary>Stops every distro, Docker Desktop's included. Only ever run for a clean up the user started.</summary>
+            _distroRuns++;
+        }
+
+        try
+        {
+            return Run(["--distribution", distro, "--exec", .. command]);
+        }
+        finally
+        {
+            lock (DistroGate)
+            {
+                _distroRuns--;
+                Monitor.PulseAll(DistroGate);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stops every distro, Docker Desktop's included. Only ever run for a clean up the user
+    /// started. A command already running in a distro (a refresh's df) would start it again
+    /// straight after, so this waits for those to end, and keeps out more until
+    /// <see cref="LetDistrosRun"/>.
+    /// </summary>
     public bool Shutdown()
     {
+        lock (DistroGate)
+        {
+            _distrosKeptOut = true;
+            var until = DateTime.UtcNow + Timeout + TimeSpan.FromSeconds(5);
+            while (_distroRuns > 0 && until - DateTime.UtcNow is { Ticks: > 0 } left)
+            {
+                Monitor.Wait(DistroGate, left);
+            }
+        }
+
         var (_, failure) = HiddenProcess.Run(ExePath, ["--shutdown"], ShutdownTimeout, Utf8);
         if (failure is not null)
         {

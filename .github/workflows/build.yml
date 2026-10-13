@@ -64,7 +64,13 @@ jobs:
         env:
           DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
           DISKTRAY_COMPACTOR_EXE: ${{ github.workspace }}\artifacts\publish\DiskTray.Compactor.exe
-        run: dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --filter-trait "Compactor=exe"
+        shell: pwsh
+        run: |
+          # Run, not skipped: each of these skips without its setting, which this sets.
+          $out = dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --filter-trait "Compactor=exe" 2>&1
+          $out | Write-Host
+          if ($LASTEXITCODE -ne 0) { throw "The native Compactor's tests failed" }
+          if (-not ($out | Select-String '^\s*skipped: 0\s*$') -or -not ($out | Select-String '^\s*succeeded: [1-9]')) { throw "The native Compactor's tests didn't all run" }
       - name: Build the MSI
         run: dotnet build installer -c Release
       - name: Download the latest release's MSI
@@ -77,10 +83,11 @@ jobs:
       - name: Install, upgrade and uninstall the MSI
         # On this throwaway runner only. Installs the latest release; checks that a clean up
         # compacting stops an upgrade and an uninstall without changing anything, and that
-        # DiskTray starts again after; upgrades to this build, checking every file is this
-        # build's and the user's settings stay; checks the installed Compactor passes
-        # DiskTray's own checks before it runs as admin; and uninstalls, closing DiskTray and
-        # taking it all away, settings included.
+        # DiskTray is running again after; upgrades to this build, checking every file is
+        # this build's, the user's settings stay and DiskTray is started again; checks the
+        # installed Compactor passes DiskTray's own checks before it runs as admin;
+        # uninstalls, closing DiskTray and taking it all away, settings included; and
+        # installs this build fresh, silently (which starts nothing), and removes it.
         shell: pwsh
         env:
           DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
@@ -102,6 +109,14 @@ jobs:
               ForEach-Object { [pscustomobject]@{ Path = $_.FullName.Substring($root.Length); Hash = (Get-FileHash $_.FullName).Hash } }
           }
           function Same($one, $other) { -not (Compare-Object @($one) @($other) -Property Path, Hash) }
+          # The DiskTray started from $folder, waited for since the installer starts it without waiting.
+          function Running([int] $seconds = 30) {
+            for ($i = 0; $i -lt $seconds; $i++) {
+              if (Get-Process DiskTray -ErrorAction SilentlyContinue | Where-Object Path -eq "$folder\DiskTray.exe") { return $true }
+              Start-Sleep -Seconds 1
+            }
+            $false
+          }
           $folder = "$env:ProgramFiles\DiskTray"
           $data = "$env:LOCALAPPDATA\DiskTray"
           $env:DISKTRAY_INSTALLED_COMPACTOR = "$folder\DiskTray.Compactor.exe"
@@ -120,7 +135,7 @@ jobs:
           $compacting = Start-Process "$fake\DiskTray.Compactor.exe" -ArgumentList '-n', '600', '127.0.0.1' -WindowStyle Hidden -PassThru
           Msi /i $msi stopped-upgrade.log 1603
           if (-not (Did stopped-upgrade.log StopWhileCompacting)) { throw "The upgrade didn't stop for the Compactor" }
-          if (-not (Did stopped-upgrade.log StartDiskTrayAfterError)) { throw "The stopped upgrade didn't start DiskTray again" }
+          if (-not (Did stopped-upgrade.log StartDiskTrayAfterError) -or -not (Running)) { throw "The stopped upgrade didn't start DiskTray again" }
           if ((Installed) -ne 1) { throw "After the stopped upgrade, Settings › Apps lists DiskTray $(Installed) times" }
           if (-not (Same $released (Files $folder))) { throw "The stopped upgrade changed what's installed" }
           Msi /x $earlier stopped-uninstall.log 1603
@@ -136,18 +151,31 @@ jobs:
             throw "After the upgrade, what's installed isn't this build"
           }
           if (-not (Test-Path "$data\ci-marker.txt")) { throw "The upgrade removed the user's settings" }
-          dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed"
+          # Closed for the upgrade, and started again, as this build.
+          if (-not (Running)) { throw "The upgrade didn't start DiskTray again" }
+          $version = (Get-Process DiskTray | Where-Object Path -eq "$folder\DiskTray.exe" | Select-Object -First 1).FileVersion
+          if ($version -ne (Get-Item artifacts/publish/DiskTray.exe).VersionInfo.FileVersion) { throw "After the upgrade, DiskTray $version is running, not this build" }
+          $out = dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed" 2>&1
+          $out | Write-Host
           if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
+          if (-not ($out | Select-String '^\s*skipped: 0\s*$') -or -not ($out | Select-String '^\s*succeeded: [1-9]')) { throw "The installed Compactor's test didn't run" }
 
           # Running, as it is for most people who uninstall, so closing it is part of it.
-          if (-not (Get-Process DiskTray -ErrorAction SilentlyContinue)) { Start-Process "$folder\DiskTray.exe" }
           Start-Sleep -Seconds 5
-          if (-not (Get-Process DiskTray -ErrorAction SilentlyContinue)) { throw "DiskTray didn't keep running before the uninstall" }
+          if (-not (Running 1)) { throw "DiskTray didn't keep running before the uninstall" }
           Msi /x $msi uninstall.log
           if (Test-Path $folder) { throw "$folder is still there after uninstalling" }
           if ((Installed) -ne 0) { throw "DiskTray is still listed in Settings › Apps after uninstalling" }
           if (Get-Process DiskTray -ErrorAction SilentlyContinue) { throw "DiskTray is still running after uninstalling" }
           if (Test-Path $data) { throw "Uninstalling left the user's settings in $data" }
+
+          # A first install, as winget or a script does it: everything in place, nothing started.
+          Msi /i $msi fresh-install.log
+          if ((Installed) -ne 1) { throw "After a fresh install, Settings › Apps lists DiskTray $(Installed) times" }
+          if (-not (Same (Files artifacts/publish) (Files $folder))) { throw "A fresh install didn't put this build in place" }
+          if (Running 5) { throw "A silent first install started DiskTray" }
+          Msi /x $msi fresh-uninstall.log
+          if ((Test-Path $folder) -or (Installed) -ne 0) { throw "Uninstalling the fresh install left DiskTray behind" }
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -175,10 +203,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # For the attestation: proof, signed by GitHub, that the MSI came from this workflow
+      # at this commit, since it isn't code-signed.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: msi
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: '*.msi'
       - run: gh release create "$GITHUB_REF_NAME" *.msi SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "DiskTray ${GITHUB_REF_NAME#v}" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}

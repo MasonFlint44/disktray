@@ -27,5 +27,7 @@ dotnet publish src/DiskTray.Compactor -c Release -r win-x64 --self-contained -p:
 
 win dotnet.exe build "$win_stage\\installer" -c Release -nologo -v quiet -p:DevBuild=true
 mkdir -p artifacts/msi
+# Only the latest dev MSI is kept; each is over 50 MB.
+rm -f artifacts/msi/*-dev.msi
 cp "$stage"/artifacts/msi/*.msi artifacts/msi/
 ls -l artifacts/msi/*.msi

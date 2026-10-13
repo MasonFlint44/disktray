@@ -29,6 +29,12 @@ public partial class App : Application
             _tray?.ShowUnexpectedError();
         };
         AppDomain.CurrentDomain.UnhandledException += (_, args) => Log.Error("Unhandled error", args.ExceptionObject as Exception);
+        // A task nothing waits on (one started with "_ =") that fails would otherwise go unseen.
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Log.Error("Unhandled error in a background task", args.Exception);
+            args.SetObserved();
+        };
 
         try
         {
@@ -96,6 +102,7 @@ public partial class App : Application
 
         Log.Info($"Started {Environment.ProcessPath}{(dryRun ? " for clean up dry runs" : "")}");
         Uninstaller.RemoveOldEntry();
+        AppDataFile.RemoveLeftovers();
         var settings = SettingsFile.Load();
         if (!settings.StartupRegistered && StartupRegistration.Set(true))
         {
@@ -146,7 +153,33 @@ public partial class App : Application
         }
 
         instance.ReleaseMutex();
+        // It lets go of the mutex as it exits, a moment before its files stop being in use.
+        WaitForOtherCopiesToExit(TimeSpan.FromSeconds(5));
         return true;
+    }
+
+    /// <summary>Waits, up to <paramref name="timeout"/>, for any other DiskTray process in this Windows session to end.</summary>
+    private static void WaitForOtherCopiesToExit(TimeSpan timeout)
+    {
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        var until = DateTime.UtcNow + timeout;
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName(self.ProcessName))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.Id != self.Id && process.SessionId == self.SessionId && until - DateTime.UtcNow is { Ticks: > 0 } left)
+                    {
+                        process.WaitForExit(left);
+                    }
+                }
+                catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    // Already gone, or not this account's to wait on.
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -180,7 +213,7 @@ public partial class App : Application
     {
         var folders = new FolderSizer();
         var scanner = new DiskScanner(
-            new SystemDiskProbe(),
+            new AllocatedSizeProbe(new SystemDiskProbe()),
             new LxssRegistry(),
             new ScanPaths(
                 (Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + @"\",

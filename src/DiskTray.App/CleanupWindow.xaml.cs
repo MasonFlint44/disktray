@@ -31,7 +31,7 @@ internal partial class CleanupWindow : FluentWindow
     {
         _dryRun = dryRun;
         _defaults = defaults;
-        _state = new CleanupState(snapshot, null, [], new HashSet<string>(), 0);
+        _state = new CleanupState(snapshot, null, [], new HashSet<string>(), null);
         InitializeComponent();
         Themes.Track(this);
 
@@ -81,13 +81,41 @@ internal partial class CleanupWindow : FluentWindow
         base.OnClosed(e);
     }
 
-    /// <summary>Fills in what Docker can prune, once it's been asked.</summary>
-    public void ShowScan(CleanupState state)
+    /// <summary>
+    /// Raised when Clean up is clicked on a dialog that has been open so long that what it
+    /// found may have changed (containers started, distros opened, volumes back in use). The
+    /// owner scans again and calls <see cref="ShowScan"/>, and the user looks it over first.
+    /// </summary>
+    public event Func<Task>? ScanAgain;
+
+    /// <summary>How long a scan is trusted for when Clean up is clicked.</summary>
+    private static readonly TimeSpan ScanLasts = TimeSpan.FromMinutes(10);
+
+    private DateTime _scannedAt;
+
+    /// <summary>
+    /// Fills in what Docker can prune, once it's been asked. <paramref name="again"/> for a
+    /// fresh scan of an open dialog: what's ticked stays as the user left it, less volumes
+    /// that have gone.
+    /// </summary>
+    public void ShowScan(CleanupState state, bool again = false)
     {
         _state = state;
         _scanned = true;
+        _scannedAt = DateTime.UtcNow;
         var defaults = CleanupChoices.Defaults(state, _defaults);
         _ready = false;
+        if (again)
+        {
+            _volumes.IntersectWith(state.Docker?.UnusedVolumes.Select(v => v.Name) ?? []);
+            Body.IsEnabled = true;
+            _ready = true;
+            BuildVolumeList();
+            Update();
+            Plan.Text = "Checked again, since this was open a while. Look it over, then click Clean up.";
+            return;
+        }
+
         Prune.IsChecked = defaults.Prune;
         if (!_startDockerSet)
         {
@@ -246,8 +274,17 @@ internal partial class CleanupWindow : FluentWindow
 
     private void OnCancelClick(object sender, RoutedEventArgs e) => Close();
 
-    private void OnStartClick(object sender, RoutedEventArgs e)
+    private async void OnStartClick(object sender, RoutedEventArgs e)
     {
+        if (DateTime.UtcNow - _scannedAt > ScanLasts && ScanAgain is { } scanAgain)
+        {
+            Body.IsEnabled = false;
+            Start.IsEnabled = false;
+            Plan.Text = "Checking again, since this was open a while…";
+            await scanAgain();
+            return;
+        }
+
         var choices = Choices();
         var model = CleanupLayout.Build(_state, choices);
         if (!model.CanStart)

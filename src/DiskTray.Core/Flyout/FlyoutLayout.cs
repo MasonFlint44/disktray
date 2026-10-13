@@ -212,8 +212,9 @@ public static class FlyoutLayout
     /// <summary>"50 GiB free (11%) – below your 15% warning level", or null when there's room.</summary>
     internal static FlyoutBanner? LowSpaceBanner(DriveSpace drive, AlertThresholds thresholds, IFormatProvider provider)
     {
-        string free = $"{ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider)})";
-        return thresholds.Classify(drive) switch
+        var level = thresholds.Classify(drive);
+        string free = $"{ByteSize.Format(drive.FreeBytes, provider)} free ({ByteSize.FormatPercent(drive.FreeFraction, provider, thresholds.FractionFor(level))})";
+        return level switch
         {
             AlertLevel.Critical => new FlyoutBanner(
                 AlertLevel.Critical,

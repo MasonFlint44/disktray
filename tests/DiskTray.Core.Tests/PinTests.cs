@@ -110,6 +110,33 @@ public class PinnedItemTests
     }
 
     [Fact]
+    public void Counts_a_file_inside_a_pinned_folder_once()
+    {
+        const string inside = Projects + @"\vm.vhdx";
+        TrayPin[] pins = [new(PinKind.Path, inside), new(PinKind.Path, Projects), new(PinKind.Drive)];
+        var snapshot = Scan(pins, (probe, folders) =>
+        {
+            probe.Files[inside] = 2L << 30;
+            folders.Sizes[Projects] = new FolderSize(3L << 30, Now);
+        });
+
+        var on = TrayLayout.ItemsOn(TrayLayout.Resolve(snapshot, pins), snapshot.SystemDrive);
+
+        Assert.Equal([DiskScanner.PathId(Projects)], on.Select(i => i.Key));
+    }
+
+    [Fact]
+    public void Counts_a_disk_pinned_by_its_path_once()
+    {
+        TrayPin[] pins = [new(PinKind.Docker), new(PinKind.Path, Machine.DockerData), new(PinKind.Drive)];
+        var snapshot = Scan(pins);
+
+        var on = TrayLayout.ItemsOn(TrayLayout.Resolve(snapshot, pins), snapshot.SystemDrive);
+
+        Assert.Equal(["docker"], on.Select(i => i.Key));
+    }
+
+    [Fact]
     public void Shows_a_folder_once_its_size_is_added_up()
     {
         TrayPin[] pins = [new(PinKind.Path, Projects)];

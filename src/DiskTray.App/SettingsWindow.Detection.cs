@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using DiskTray.Core.Cleanup;
 using DiskTray.Core.Settings;
 using Microsoft.Win32;
 using Wpf.Ui.Controls;
@@ -68,10 +69,25 @@ internal partial class SettingsWindow
     {
         // Starting in WSL makes the usual place, ~/git in a distro, a couple of clicks away.
         var dialog = new OpenFolderDialog { Title = "Add a code folder", InitialDirectory = @"\\wsl.localhost\" };
-        if (dialog.ShowDialog(this) == true && !_codeFolders.Contains(dialog.FolderName, StringComparer.OrdinalIgnoreCase))
+        if (dialog.ShowDialog(this) != true || _codeFolders.Contains(dialog.FolderName, StringComparer.OrdinalIgnoreCase))
         {
-            _codeFolders.Add(dialog.FolderName);
-            BuildCodeFolderRows();
+            return;
         }
+
+        // The search only looks in WSL and on this PC's own drives; anything else would be
+        // left out without a word, or hold up opening Clean up while the network answered.
+        if (ProjectFolder.FromWindowsPath(dialog.FolderName) is not { } folder || (folder.Distro is null && !LocalDrive(dialog.FolderName)))
+        {
+            _ = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = "Can't search that folder",
+                Content = "Pick a folder inside a WSL distro (such as ~/git) or on this PC's own drives. A whole distro, or a folder on a network share, can't be searched.",
+                CloseButtonText = "OK",
+            }.ShowDialogAsync();
+            return;
+        }
+
+        _codeFolders.Add(dialog.FolderName);
+        BuildCodeFolderRows();
     }
 }

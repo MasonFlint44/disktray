@@ -1045,8 +1045,38 @@ public class CleanupRunTests
         var result = await Run(Request(prune: false));
 
         Assert.Equal("The Compactor didn't start.", result.Problem);
-        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.Equal(["admin granted", "signal cancel"], _events);
         Assert.Empty(_docker.Calls);
+    }
+
+    [Fact]
+    public async Task Shuts_nothing_down_when_the_compactor_goes_while_docker_desktop_stops()
+    {
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _docker.OnStop = () => _launcher.HasExited = true;
+
+        var result = await Run(Request(prune: false));
+
+        Assert.Contains("closed before compacting, so WSL wasn't shut down", result.Problem);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        // Docker Desktop was stopped for it, so it's started again as asked.
+        Assert.Equal(["desktop stop --timeout 180", "desktop start --detach"], _docker.Calls);
+    }
+
+    [Fact]
+    public async Task Shuts_nothing_down_when_the_compactor_goes_during_the_last_idle_check()
+    {
+        _launcher.Script.Enqueue(new CompactStatus(CompactState.Waiting));
+        _docker.DesktopRunning = false;
+        int asked = 0;
+        // The second question is the last one before shutting down.
+        _wsl.OnRunningDistros = () => _launcher.HasExited = ++asked >= 2;
+
+        var result = await Run(Request(CompactWhen.WhenIdle, prune: false));
+
+        Assert.Contains("closed before compacting", result.Problem);
+        Assert.DoesNotContain("wsl --shutdown", _events);
+        Assert.DoesNotContain(_docker.Calls, c => c.StartsWith("desktop start", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1221,7 +1251,7 @@ public class CleanupRunTests
 
         await Run(Request(prune: false));
 
-        Assert.Equal([CleanupMilestone.Stopping, CleanupMilestone.Stopping, CleanupMilestone.Compacting], _milestones);
+        Assert.Equal([CleanupMilestone.Stopping, CleanupMilestone.Compacting], _milestones);
     }
 
     [Fact]

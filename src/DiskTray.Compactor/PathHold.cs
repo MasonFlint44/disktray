@@ -32,6 +32,9 @@ internal sealed class PathHold : IDisposable
     private readonly List<SafeFileHandle> _handles;
     private readonly string _path;
 
+    /// <summary>The file's change number once it was held and checked; see <see cref="LinkSafePath.ChangeNumber"/>.</summary>
+    private long? _changeNumber;
+
     private PathHold(List<SafeFileHandle> handles, string path)
     {
         _handles = handles;
@@ -59,11 +62,14 @@ internal sealed class PathHold : IDisposable
 
     /// <summary>
     /// Why the held file isn't the one that was checked any more, or null when it still is:
-    /// it has become a link, or gained another name. For after Windows' virtual disk service
-    /// has opened it by its path.
+    /// it has become a link, or gained another name, or anything about it has changed since
+    /// it was held, which catches a link put on it and taken off again while Windows' virtual
+    /// disk service opened it by its path (on a volume with a change journal, as Windows
+    /// drives have). For after that open.
     /// </summary>
     public string? Changed() =>
         LinkSafePath.Read(File, out var info) && !info.IsLink && info.NumberOfLinks == 1 && LinkSafePath.IsAt(File, _path)
+            && LinkSafePath.ChangeNumber(File) == _changeNumber
             ? null
             : "it changed while it was being opened to compact";
 
@@ -124,6 +130,7 @@ internal sealed class PathHold : IDisposable
             return null;
         }
 
+        hold._changeNumber = LinkSafePath.ChangeNumber(file);
         problem = null;
         return hold;
     }

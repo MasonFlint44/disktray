@@ -1,0 +1,38 @@
+# Opens a pull request when something DiskTray is built with has a newer version. Each one
+# runs the full build, tests and installer checks before it can be merged.
+version: 2
+updates:
+  # The .NET SDK in global.json, pinned exactly: it decides the .NET runtime the MSI brings
+  # and the compiler that builds the native Compactor. Its monthly patches often carry
+  # security fixes, which reach users only in a new DiskTray release.
+  - package-ecosystem: dotnet-sdk
+    directory: /
+    schedule:
+      interval: weekly
+
+  # NuGet packages, with their lock files.
+  - package-ecosystem: nuget
+    directories:
+      - /src/*
+      - /tests/*
+      - /installer
+    schedule:
+      interval: weekly
+    groups:
+      # Minor and patch updates together, one pull request a week at most.
+      minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # WiX 6 changed its licence terms, so moving to a new major version is a decision,
+      # not an update.
+      - dependency-name: "WixToolset.*"
+        update-types: [version-update:semver-major]
+
+  # The workflow's actions, pinned to commits; this moves the commit and its version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -43,6 +43,15 @@ public class FlyoutLayoutTests
     }
 
     [Fact]
+    public void Never_shows_low_free_space_rounded_up_to_its_level()
+    {
+        var banner = FlyoutLayout.LowSpaceBanner(new DriveSpace(@"C:\", 1000, 146), new AlertThresholds(), CultureInfo.InvariantCulture);
+
+        Assert.EndsWith("free (14%) – below your 15% warning level", banner!.Text);
+        Assert.Contains("(14%) – below 15% warning", TrayLayout.FreeLine(new DriveSpace(@"C:\", 1000, 146), new AlertThresholds(), CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public void Has_no_banner_when_there_is_room() =>
         Assert.Null(FlyoutLayout.LowSpaceBanner(new DriveSpace(@"C:\", 1000, 500), new AlertThresholds(), CultureInfo.InvariantCulture));
 

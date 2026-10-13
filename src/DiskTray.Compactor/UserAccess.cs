@@ -30,13 +30,17 @@ internal sealed partial class UserAccess : IDisposable
 
     private UserAccess(SafeAccessTokenHandle token) => _token = token;
 
-    /// <summary>The account of the process that made the pipe, or null with why it can't be told.</summary>
+    /// <summary>
+    /// The account of the process that made the pipe, or null with why it can't be told.
+    /// That process must be running <paramref name="app"/>: the DiskTray.exe beside the
+    /// Compactor, which in Program Files only admins can change.
+    /// </summary>
     /// <remarks>
     /// Windows gives the process's ID, which is reused once that process ends, so the account
     /// found must also be the pipe's owner (DiskTray sets itself as that): an ID that has
     /// passed to another process, a service say, can't stand in for the one that made it.
     /// </remarks>
-    public static UserAccess? OfPipeServer(SafePipeHandle pipe, out string? problem)
+    public static UserAccess? OfPipeServer(SafePipeHandle pipe, string app, out string? problem)
     {
         if (!GetNamedPipeServerProcessId(pipe, out uint server))
         {
@@ -44,7 +48,16 @@ internal sealed partial class UserAccess : IDisposable
             return null;
         }
 
-        var user = OfProcess(server, out problem);
+        var user = OfProcess(server, out problem, out string? image);
+        if (user is not null && !string.Equals(image, app, StringComparison.OrdinalIgnoreCase))
+        {
+            problem = image is null
+                ? "couldn't tell which program is on the other end of the pipe"
+                : $"found the program on the other end of the pipe ({image}) isn't the DiskTray.exe beside it";
+            user.Dispose();
+            return null;
+        }
+
         switch (user?.Owns(pipe))
         {
             case null:
@@ -62,14 +75,17 @@ internal sealed partial class UserAccess : IDisposable
     }
 
     /// <summary>The account process <paramref name="id"/> runs as, or null with why it can't be told.</summary>
-    public static UserAccess? OfProcess(uint id, out string? problem)
+    public static UserAccess? OfProcess(uint id, out string? problem) => OfProcess(id, out problem, out _);
+
+    /// <summary>The same, and the full path of the program it runs, when that can be read.</summary>
+    private static UserAccess? OfProcess(uint id, out string? problem, out string? image)
     {
         // Another account's DiskTray (a standard user who typed an admin's password) may only
         // be readable with the debug privilege, which admins have but don't use by default.
-        var token = ImpersonationToken(id, out int error);
+        var token = ImpersonationToken(id, out int error, out image);
         if (token is null && error == WindowsError.AccessDenied && SetDebugPrivilege(true))
         {
-            token = ImpersonationToken(id, out error);
+            token = ImpersonationToken(id, out error, out image);
         }
 
         // Only ever needed for that, so it's off from here on, even if this process started with it on.
@@ -150,14 +166,17 @@ internal sealed partial class UserAccess : IDisposable
         }
     }
 
-    private static SafeAccessTokenHandle? ImpersonationToken(uint processId, out int error)
+    private static SafeAccessTokenHandle? ImpersonationToken(uint processId, out int error, out string? image)
     {
         using var process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
         if (process.IsInvalid)
         {
             error = Marshal.GetLastPInvokeError();
+            image = null;
             return null;
         }
+
+        image = ImageOf(process);
 
         if (!OpenProcessToken(process, TokenDuplicate | TokenQuery, out var primary))
         {
@@ -168,6 +187,17 @@ internal sealed partial class UserAccess : IDisposable
         using (primary)
         {
             return Impersonation(primary, out error);
+        }
+    }
+
+    /// <summary>The full path of the program <paramref name="process"/> runs, or null when it can't be read.</summary>
+    private static unsafe string? ImageOf(SafeProcessHandle process)
+    {
+        var buffer = new char[32768];
+        int length = buffer.Length;
+        fixed (char* path = buffer)
+        {
+            return QueryFullProcessImageName(process, 0, path, ref length) ? new string(path, 0, length) : null;
         }
     }
 
@@ -220,6 +250,10 @@ internal sealed partial class UserAccess : IDisposable
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     private static partial SafeProcessHandle OpenProcess(uint access, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint processId);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool QueryFullProcessImageName(SafeProcessHandle process, uint flags, char* path, ref int length);
 
     /// <summary>What GetCurrentProcess returns: a stand-in for this process that needs no closing.</summary>
     private const nint CurrentProcess = -1;

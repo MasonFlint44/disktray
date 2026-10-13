@@ -23,33 +23,57 @@ internal sealed class CleanupScanner(DockerExe docker, WslExe wsl)
         if (desktop != true || docker.Run(DockerOutput.DiskUsageCommand, DiskUsageTimeout) is not { } dfOutput
             || DockerOutput.ParseDiskUsage(dfOutput) is not { } usage)
         {
-            return new CleanupState(snapshot, null, [], known, 0) { DesktopRunning = desktop, RunningKnown = running is not null };
+            return new CleanupState(snapshot, null, [], known, desktop == false ? 0 : null) { DesktopRunning = desktop, RunningKnown = running is not null };
         }
 
-        var containers = Containers();
+        var (containers, allContainers) = Containers();
         var fromContainers = VolumeConfidence.FoldersFromContainers(containers, snapshot.PrimaryDistro?.Name);
         var cache = ProjectFolderCacheFile.Load();
-        if (cache.Record(fromContainers, DateTimeOffset.Now))
+        bool changed = cache.Record(fromContainers, DateTimeOffset.Now);
+        // Only when Docker said which containers there are, so a failed listing forgets nothing.
+        if (allContainers)
+        {
+            var inDocker = containers.Select(c => c.Labels.GetValueOrDefault(DockerOutput.ProjectLabel))
+                .Concat(usage.UnusedVolumes.Select(v => v.Project))
+                .OfType<string>();
+            changed |= cache.Forget(inDocker, DateTimeOffset.Now);
+        }
+
+        if (changed)
         {
             ProjectFolderCacheFile.Save(cache);
         }
 
         var searchIn = codeFolders.Select(ProjectFolder.FromWindowsPath).OfType<ProjectFolder>();
         var groups = VolumeConfidence.Group(usage.UnusedVolumes, fromContainers, cache, searchIn, new FolderLookup(known));
-        return new CleanupState(snapshot, usage, groups, known, containers.Count(c => c.Running)) { DesktopRunning = true, RunningKnown = running is not null };
+        return new CleanupState(snapshot, usage, groups, known, allContainers ? containers.Count(c => c.Running) : null) { DesktopRunning = true, RunningKnown = running is not null };
     }
 
-    private IReadOnlyList<DockerContainer> Containers()
+    /// <summary>
+    /// Every container, running or not, and whether that's all of them. A container whose
+    /// batch fails is left out, as if it weren't there.
+    /// </summary>
+    private (IReadOnlyList<DockerContainer> Containers, bool All) Containers()
     {
-        if (docker.Run(DockerOutput.ContainerIdsCommand, QuickTimeout) is not { } idOutput
-            || DockerOutput.ParseIds(idOutput) is not { Count: > 0 } ids)
+        if (docker.Run(DockerOutput.ContainerIdsCommand, QuickTimeout) is not { } idOutput)
         {
-            return [];
+            return ([], false);
         }
 
-        // A container whose batch fails is left out, as if it weren't there.
-        return DockerOutput.InspectCommands(ids)
-            .SelectMany(command => docker.Run(command, QuickTimeout) is { } inspect ? DockerOutput.ParseContainers(inspect) : [])
-            .ToList();
+        var containers = new List<DockerContainer>();
+        bool all = true;
+        foreach (var command in DockerOutput.InspectCommands(DockerOutput.ParseIds(idOutput)))
+        {
+            if (docker.Run(command, QuickTimeout) is { } inspect)
+            {
+                containers.AddRange(DockerOutput.ParseContainers(inspect));
+            }
+            else
+            {
+                all = false;
+            }
+        }
+
+        return (containers, all);
     }
 }

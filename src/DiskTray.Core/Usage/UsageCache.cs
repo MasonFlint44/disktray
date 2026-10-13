@@ -26,14 +26,31 @@ public sealed class UsageCache
 
     public void MarkSaved() => Changed = false;
 
+    /// <summary>
+    /// Keeps the reading. Only one that says something new counts as a change: a new size or
+    /// amount in use, or the same an hour on, so a refresh every few minutes while a distro
+    /// runs doesn't rewrite the file each time.
+    /// </summary>
     public void Set(string path, UsageReading reading)
     {
-        if (_readings.GetValueOrDefault(path) != reading)
+        var before = _readings.GetValueOrDefault(path);
+        _readings[path] = reading;
+        if (before is null
+            || before.UsedBytes != reading.UsedBytes
+            || before.FileSizeBytes != reading.FileSizeBytes
+            || !_newsAt.TryGetValue(path, out var news)
+            || (reading.MeasuredAt - news).Duration() >= MeasuredPrecision)
         {
-            _readings[path] = reading;
+            _newsAt[path] = reading.MeasuredAt;
             Changed = true;
         }
     }
+
+    /// <summary>When each disk's reading last said something new.</summary>
+    private readonly Dictionary<string, DateTimeOffset> _newsAt = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>How far a reading's time moves before an otherwise unchanged one is worth saving.</summary>
+    private static readonly TimeSpan MeasuredPrecision = TimeSpan.FromHours(1);
 
     /// <summary>How long a reading for a disk file that's no longer seen is kept, in case it comes back.</summary>
     public static readonly TimeSpan ForgetAfter = TimeSpan.FromDays(30);
@@ -67,6 +84,7 @@ public sealed class UsageCache
         {
             _readings.Remove(path);
             _seen.Remove(path);
+            _newsAt.Remove(path);
             Changed = true;
         }
     }

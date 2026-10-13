@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Collections.ObjectModel;
 using DiskTray.Core.Alerts;
@@ -146,16 +147,25 @@ public sealed record AppSettings
     public string ToJson() => JsonSerializer.Serialize(this, Json);
 
     /// <summary>
-    /// Reads saved settings. A file that can't be read gives the defaults, and a value that
-    /// makes no sense goes back to its default, so a hand-edited file can't stop the app.
+    /// Reads saved settings. A value that can't be read, or makes no sense, goes back to its
+    /// default and the rest are kept, so a hand-edited file (or one from a newer DiskTray)
+    /// can't stop the app or lose everything; see <see cref="Read"/> for which were dropped.
     /// </summary>
-    public static AppSettings FromJson(string? json)
+    public static AppSettings FromJson(string? json) => Read(json).Settings;
+
+    /// <summary>
+    /// <see cref="FromJson"/>, also giving the names of the values that couldn't be read
+    /// ("the whole file" when it isn't a JSON object at all). Whether DiskTray was added to
+    /// Startup apps counts as yes when it can't be read, so the user's choice there is left alone.
+    /// </summary>
+    public static (AppSettings Settings, IReadOnlyList<string> Dropped) Read(string? json)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
-            return Defaults;
+            return (Defaults, []);
         }
 
+        var dropped = new List<string>();
         AppSettings? settings;
         try
         {
@@ -163,14 +173,88 @@ public sealed record AppSettings
         }
         catch (JsonException)
         {
-            return Defaults;
+            settings = ReadEach(json, dropped);
         }
 
         if (settings is null)
         {
-            return Defaults;
+            return (Defaults with { StartupRegistered = true }, ["the whole file"]);
         }
 
+        if (dropped.Contains(nameof(StartupRegistered), StringComparer.OrdinalIgnoreCase))
+        {
+            settings = settings with { StartupRegistered = true };
+        }
+
+        return (Clean(settings), dropped);
+    }
+
+    /// <summary>
+    /// Reads the values one at a time, leaving out each that can't be read, and from a list
+    /// (the pins) each item that can't. Null when it isn't a JSON object.
+    /// </summary>
+    private static AppSettings? ReadEach(string json, List<string> dropped)
+    {
+        JsonObject? all;
+        try
+        {
+            all = JsonNode.Parse(json) as JsonObject;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (all is null)
+        {
+            return null;
+        }
+
+        var kept = new JsonObject();
+        foreach (var (name, value) in all.ToList())
+        {
+            if (Reads(kept, name, value?.DeepClone()))
+            {
+                continue;
+            }
+
+            if (value is JsonArray items)
+            {
+                var readable = new JsonArray(items.Where(item => Reads(new JsonObject(), name, new JsonArray(item?.DeepClone()))).Select(item => item?.DeepClone()).ToArray());
+                if (readable.Count > 0 && Reads(kept, name, readable))
+                {
+                    dropped.Add($"some of {name}");
+                    continue;
+                }
+            }
+
+            dropped.Add(name);
+        }
+
+        return kept.Deserialize<AppSettings>(Json);
+    }
+
+    /// <summary>Adds the value to <paramref name="kept"/> if, with what's there, it can be read.</summary>
+    private static bool Reads(JsonObject kept, string name, JsonNode? value)
+    {
+        var trial = (JsonObject)kept.DeepClone();
+        trial[name] = value;
+        try
+        {
+            trial.Deserialize<AppSettings>(Json);
+        }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            return false;
+        }
+
+        kept[name] = value?.DeepClone();
+        return true;
+    }
+
+    /// <summary>Puts each value that makes no sense back to its default.</summary>
+    private static AppSettings Clean(AppSettings settings)
+    {
         if (!Enum.IsDefined(settings.Theme))
         {
             settings = settings with { Theme = Defaults.Theme };

@@ -14,6 +14,13 @@
                   DowngradeErrorMessage="A newer version of DiskTray is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
+    <?if "$(DevBuild)" = "true" ?>
+    <!-- Every local build's files have the same version (BuildNumber 0), which an upgrade
+         would leave in place, so a dev MSI rewrites them all. A release replaces a dev
+         build's files by version anyway, since its run number is higher. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
+    <?endif?>
+
     <!-- Settings › Apps: the icon, and only Uninstall (there's nothing to change or repair). -->
     <Icon Id="DiskTray.ico" SourceFile="..\src\DiskTray.App\app.ico" />
     <Property Id="ARPPRODUCTICON" Value="DiskTray.ico" />

@@ -21,7 +21,9 @@ internal sealed class DockerExe : IDockerCli
             return null;
         }
 
-        var (output, failure) = HiddenProcess.Run(_exePath, args, timeout);
+        // Docker Desktop, once it's started, may be one of the things docker.exe started.
+        bool starts = args.SequenceEqual(DockerOutput.DesktopStartCommand);
+        var (output, failure) = HiddenProcess.Run(_exePath, args, timeout, killTree: !starts);
         if (failure is not null)
         {
             Log.Info($"docker {string.Join(' ', args)} {failure}");

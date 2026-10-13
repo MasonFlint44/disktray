@@ -7,5 +7,6 @@
   <Folder Name="/tests/">
     <Project Path="tests/DiskTray.Core.Tests/DiskTray.Core.Tests.csproj" />
     <Project Path="tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj" />
+    <Project Path="tests/DiskTray.TestHelper/DiskTray.TestHelper.csproj" />
   </Folder>
 </Solution>

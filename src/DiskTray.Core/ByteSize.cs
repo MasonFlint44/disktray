@@ -40,17 +40,27 @@ public static class ByteSize
         return $"{number} {Units[unit]}";
     }
 
-    /// <summary>Formats a 0–1 fraction as a whole percentage, with "&lt;1%" for small non-zero values.</summary>
-    public static string FormatPercent(double fraction, IFormatProvider? provider = null)
+    /// <summary>
+    /// Formats a 0–1 fraction as a whole percentage, with "&lt;1%" for small non-zero values.
+    /// <paramref name="below"/> is a level the fraction is under, which rounding never
+    /// reaches: 14.6% free reads "14%" next to "below your 15% warning level", not "15%".
+    /// </summary>
+    public static string FormatPercent(double fraction, IFormatProvider? provider = null, double? below = null)
     {
         provider ??= CultureInfo.CurrentCulture;
         double percent = fraction * 100;
-        if (percent > 0 && percent < 0.5)
+        double whole = Math.Round(percent, MidpointRounding.AwayFromZero);
+        if (below is { } level && whole >= Math.Round(level * 100, MidpointRounding.AwayFromZero))
+        {
+            whole = Math.Floor(percent);
+        }
+
+        if (percent > 0 && whole < 1 && percent < 1)
         {
             return "<1%";
         }
 
-        return Math.Round(percent, MidpointRounding.AwayFromZero).ToString("0", provider) + "%";
+        return whole.ToString("0", provider) + "%";
     }
 
     private static double Round(double value) =>

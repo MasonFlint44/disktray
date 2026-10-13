@@ -3,24 +3,29 @@
        Compactor that Clean up runs as admin. Built by scripts/build-msi.sh and the
        GitHub Actions workflow, after both apps are published to PublishDir. -->
   <PropertyGroup>
+    <DevBuild Condition="'$(DevBuild)' == ''">false</DevBuild>
     <OutputName>DiskTray-$(Version)-x64</OutputName>
     <!-- scripts/build-msi.sh: a local build to try the installer with, whose Compactor isn't native. -->
     <OutputName Condition="'$(DevBuild)' == 'true'">DiskTray-$(Version)-x64-dev</OutputName>
     <InstallerPlatform>x64</InstallerPlatform>
     <OutputPath>$(MSBuildThisFileDirectory)..\artifacts\msi\</OutputPath>
     <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\</PublishDir>
-    <DefineConstants>PublishDir=$(PublishDir);Version=$(Version)</DefineConstants>
+    <DefineConstants>PublishDir=$(PublishDir);Version=$(Version);DevBuild=$(DevBuild)</DefineConstants>
     <!-- ICE43 and ICE57 treat the Start menu as per-user, so they want the shortcut keyed in
          HKCU; it's the all-users Start menu here (ALLUSERS=1), owned by DiskTray.exe's
          component. ICE61 warns about same-version upgrades, which are wanted. -->
     <SuppressIces>ICE43;ICE57;ICE61</SuppressIces>
+    <!-- ICE40 warns about REINSTALLMODE in the Property table, which only a dev MSI sets. -->
+    <SuppressIces Condition="'$(DevBuild)' == 'true'">$(SuppressIces);ICE40</SuppressIces>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
   </ItemGroup>
   <!-- A release must carry the native Compactor, as the app checks before running it: a
-       NativeAOT exe exports DotNetRuntimeDebugHeader (see NativeExe in DiskTray.Core), and a
-       .NET one has its .dll beside it. -->
+       NativeAOT exe exports DotNetRuntimeDebugHeader (the app reads its export table; see
+       NativeExe in DiskTray.Core), and a .NET one has its .dll beside it. Here the name is
+       only looked for anywhere in the exe, which is enough to catch a .NET build; the
+       workflow's tests run the app's own check on the published exe. -->
   <Target Name="RequireNativeCompactor" BeforeTargets="Build" Condition="'$(DevBuild)' != 'true'">
     <Error Condition="!Exists('$(PublishDir)DiskTray.Compactor.exe')" Text="DiskTray.Compactor.exe isn't in $(PublishDir)." />
     <Error Condition="Exists('$(PublishDir)DiskTray.Compactor.dll') Or !$([System.IO.File]::ReadAllText('$(PublishDir)DiskTray.Compactor.exe').Contains('DotNetRuntimeDebugHeader'))"

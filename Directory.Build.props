@@ -8,14 +8,30 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Shown in Settings › Apps. -->
     <Version>0.1.4</Version>
-    <!-- The exes' file version gets a fourth number that only grows: the GitHub Actions run
-         number there, 0 for a local build. An upgrade replaces a file only when its version
-         is higher, so this way a release replaces a local build of the same version, and each
-         build replaces the one before. -->
+    <!-- The exes' file version gets a fourth number: the GitHub Actions run number there, 0
+         for a local build. An upgrade replaces a file only when its version is higher, so
+         this way a release replaces a local build of the same version and each release build
+         the one before; a dev MSI rewrites every file instead (see Package.wxs). It's 16 bits,
+         which the check below holds to. -->
     <BuildNumber Condition="'$(BuildNumber)' == ''">0</BuildNumber>
     <FileVersion>$(Version).$(BuildNumber)</FileVersion>
     <Product>DiskTray</Product>
+    <!-- In GitHub Actions, builds leave out where on the runner they were made, so the same
+         commit builds the same files. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <!-- DiskTray is in English, so leave out the runtime's translated messages. -->
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Each project's packages.lock.json holds the exact version (and hash) of every package
+         it uses, its packages' packages too: the ones the tests passed with. GitHub Actions
+         restores only those, and fails if a project no longer matches its lock file; a
+         local restore updates the lock file, to be committed with the change that needed it. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
+    <!-- Every restore covers win-x64, so one for a publish (-r win-x64) matches the lock file
+         that a plain build wrote. -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
+  <Target Name="CheckBuildNumber" BeforeTargets="Build">
+    <Error Condition="$(BuildNumber) &gt; 65535" Text="BuildNumber $(BuildNumber) is past 65535, the most a file version's part can be." />
+  </Target>
 </Project>

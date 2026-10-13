@@ -7,7 +7,7 @@ internal static class UsageCacheFile
 {
     private const string Name = "usage.json";
 
-    public static UsageCache Load() => UsageCache.FromJson(AppDataFile.Read(Name));
+    public static UsageCache Load() => UsageCache.FromJson(AppDataFile.ReadJson(Name));
 
     public static bool Save(UsageCache cache) => AppDataFile.Write(Name, cache.ToJson());
 }

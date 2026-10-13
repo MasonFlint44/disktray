@@ -7,7 +7,7 @@ internal static class ProjectFolderCacheFile
 {
     private const string Name = "projects.json";
 
-    public static ProjectFolderCache Load() => ProjectFolderCache.FromJson(AppDataFile.Read(Name));
+    public static ProjectFolderCache Load() => ProjectFolderCache.FromJson(AppDataFile.ReadJson(Name));
 
     public static void Save(ProjectFolderCache cache) => AppDataFile.Write(Name, cache.ToJson());
 }

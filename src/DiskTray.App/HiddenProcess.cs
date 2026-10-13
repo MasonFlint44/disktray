@@ -8,13 +8,18 @@ namespace DiskTray.App;
 internal static class HiddenProcess
 {
     /// <summary>The output, or null with why it failed (a non-zero exit, a timeout, or it didn't start).</summary>
+    /// <param name="killTree">
+    /// On a timeout, also end what it started. False for a program that starts something meant
+    /// to outlive it (<c>docker desktop start</c> starting Docker Desktop).
+    /// </param>
     public static (string? Output, string? Failure) Run(
         string exe,
         IReadOnlyList<string> args,
         TimeSpan timeout,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null,
+        bool killTree = true)
     {
-        var result = RunToEnd(exe, args, timeout, environment);
+        var result = RunToEnd(exe, args, timeout, environment, killTree);
         return (result.ExitCode == 0 ? result.Output : null, result.Failure);
     }
 
@@ -26,7 +31,8 @@ internal static class HiddenProcess
         string exe,
         IReadOnlyList<string> args,
         TimeSpan timeout,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null,
+        bool killTree = true)
     {
         var start = new ProcessStartInfo(exe)
         {
@@ -58,7 +64,7 @@ internal static class HiddenProcess
             var clock = Stopwatch.StartNew();
             if (!process.WaitForExit(timeout) || !Task.WaitAll([output, error], Remaining(timeout, clock)))
             {
-                Kill(process);
+                Kill(process, killTree);
                 return (null, $"timed out after {timeout.TotalSeconds:0} s", null);
             }
 
@@ -73,14 +79,15 @@ internal static class HiddenProcess
     }
 
     /// <summary>
-    /// Ends the process and whatever it started. One that can't be ended (it's gone already,
-    /// or a child won't go) still counts as timed out, rather than as a failure to run it.
+    /// Ends the process, and whatever it started when <paramref name="tree"/>. One that can't
+    /// be ended (it's gone already, or a child won't go) still counts as timed out, rather
+    /// than as a failure to run it.
     /// </summary>
-    private static void Kill(Process process)
+    private static void Kill(Process process, bool tree)
     {
         try
         {
-            process.Kill(entireProcessTree: true);
+            process.Kill(entireProcessTree: tree);
         }
         catch (Exception e) when (e is AggregateException or System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException)
         {

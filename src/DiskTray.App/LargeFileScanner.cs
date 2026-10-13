@@ -30,11 +30,14 @@ internal sealed class LargeFileScanner : IDisposable
     private bool _enabled;
     private int _scanning;
 
+    /// <summary>Set when a scan is asked for while one is going, which then goes round again with the new settings.</summary>
+    private int _again;
+
     public LargeFileScanner(bool enabled, long minBytes)
     {
         _enabled = enabled;
         _minBytes = minBytes;
-        Last = LargeFileScan.FromJson(AppDataFile.Read(FileName));
+        Last = LargeFileScan.FromJson(AppDataFile.ReadJson(FileName));
         _timer = new Timer(_ => ScanIfDue(), null, StartupDelay, CheckInterval);
     }
 
@@ -45,7 +48,10 @@ internal sealed class LargeFileScanner : IDisposable
 
     public bool Scanning => _scanning == 1;
 
-    /// <summary>Follows Settings › Detection. Lowering the threshold means looking again.</summary>
+    /// <summary>
+    /// Follows Settings › Detection. Turning it on with no scan yet, or lowering the
+    /// threshold, means looking now.
+    /// </summary>
     public void Configure(bool enabled, long minBytes)
     {
         lock (_gate)
@@ -54,7 +60,7 @@ internal sealed class LargeFileScanner : IDisposable
             _minBytes = minBytes;
         }
 
-        if (enabled && Last is { } last && last.IsDue(DateTimeOffset.Now, minBytes))
+        if (enabled && (Last is null || Last.IsDue(DateTimeOffset.Now, minBytes)))
         {
             ScanNow();
         }
@@ -79,8 +85,19 @@ internal sealed class LargeFileScanner : IDisposable
             minBytes = _minBytes;
         }
 
-        if ((!force && Last is { } last && !last.IsDue(DateTimeOffset.Now, minBytes)) || Interlocked.Exchange(ref _scanning, 1) == 1)
+        if (!force && Last is { } last && !last.IsDue(DateTimeOffset.Now, minBytes))
         {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _scanning, 1) == 1)
+        {
+            // The one going may be for an old threshold: it looks again once it's done.
+            if (force)
+            {
+                Interlocked.Exchange(ref _again, 1);
+            }
+
             return;
         }
 
@@ -122,6 +139,11 @@ internal sealed class LargeFileScanner : IDisposable
             thread.Priority = priority;
             Interlocked.Exchange(ref _scanning, 0);
             Changed?.Invoke(this, EventArgs.Empty);
+        }
+
+        if (Interlocked.Exchange(ref _again, 0) == 1)
+        {
+            Scan(force: false);
         }
     }
 }

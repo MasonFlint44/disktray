@@ -38,7 +38,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         /// <summary>The Compactor is on the other end; only the pipe closing means it has ended.</summary>
         Connected,
 
-        /// <summary>The pipe has closed, or something else connected and was hung up on.</summary>
+        /// <summary>The pipe has closed, or the Compactor never connected.</summary>
         Ended,
     }
 
@@ -226,14 +226,19 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         try
         {
             using var timeout = new CancellationTokenSource(ConnectTimeout);
-            await pipe.WaitForConnectionAsync(timeout.Token);
-
-            // Only the process just started may be on the other end.
-            if (!NativeMethods.GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint client) || client != clientId)
+            while (true)
             {
+                await pipe.WaitForConnectionAsync(timeout.Token);
+
+                // Only the process just started may be on the other end. Something else (only
+                // this account can connect) is hung up on, and the pipe kept for the Compactor.
+                if (NativeMethods.GetNamedPipeClientProcessId(pipe.SafePipeHandle, out uint client) && client == clientId)
+                {
+                    break;
+                }
+
                 Log.Info($"Something other than the Compactor ({client}) connected to its pipe; hanging up");
                 pipe.Disconnect();
-                return;
             }
 
             lock (_gate)

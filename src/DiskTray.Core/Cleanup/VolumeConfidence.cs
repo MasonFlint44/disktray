@@ -41,6 +41,13 @@ public sealed record VolumeGroup(
     /// <summary>The folder was checked and isn't there, though that alone didn't make it <see cref="FolderCheck.Deleted"/>.</summary>
     public bool FolderGone { get; init; }
 
+    /// <summary>
+    /// When the folder is only remembered (no container shows it now), when a container last
+    /// did. A project cloned again somewhere DiskTray doesn't search looks deleted, so the
+    /// date lets the user tell one they've used since.
+    /// </summary>
+    public DateTimeOffset? LastSeen { get; init; }
+
     public long SizeBytes => Volumes.Sum(v => v.SizeBytes);
 }
 
@@ -93,7 +100,10 @@ public static class VolumeConfidence
             var remembered = cache.Get(project);
             if (FolderOf(live, remembered) is { } folder)
             {
-                groups.Add(KnownFolder(project, folder, [live, remembered], volumes, listings, searched, lookup));
+                groups.Add(KnownFolder(project, folder, [live, remembered], volumes, listings, searched, lookup) with
+                {
+                    LastSeen = live is null ? cache.SeenAt(project) : null,
+                });
             }
             else if (MatchByName(project, listings) is { } match)
             {
@@ -128,7 +138,8 @@ public static class VolumeConfidence
     /// The group for a project whose folder is known. That folder being gone only makes it
     /// deleted when nothing says the project lives on elsewhere: not the other folder known
     /// for it (from a container now, or remembered), and not a folder by its name in the code
-    /// folders (cloned again somewhere new, say).
+    /// folders or next to a known folder (cloned again somewhere new, say). A copy elsewhere
+    /// isn't found, which is why a remembered folder's group says when it was last seen.
     /// </summary>
     private static VolumeGroup KnownFolder(
         string project,
@@ -212,7 +223,8 @@ public static class VolumeConfidence
 
     /// <summary>
     /// The name Compose gives a project in a folder: lower case, keeping only letters, digits,
-    /// "-" and "_" (so <c>acme.web-app</c> becomes <c>acmeweb-app</c>).
+    /// "-" and "_", and starting with a letter or digit (so <c>acme.web-app</c> becomes
+    /// <c>acmeweb-app</c>, and <c>_scratch</c> <c>scratch</c>).
     /// </summary>
     public static string ProjectName(string folderName)
     {
@@ -225,7 +237,7 @@ public static class VolumeConfidence
             }
         }
 
-        return name.ToString();
+        return name.ToString().TrimStart('_', '-');
     }
 
     /// <summary>A folder whose Compose name is the project's, allowing for VS Code's "_devcontainer" ending.</summary>

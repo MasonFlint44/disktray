@@ -7,7 +7,7 @@ internal static class AlertStateFile
 {
     private const string Name = "alerts.json";
 
-    public static AlertState Load() => AlertState.FromJson(AppDataFile.Read(Name));
+    public static AlertState Load() => AlertState.FromJson(AppDataFile.ReadJson(Name));
 
     public static void Save(AlertState state) => AppDataFile.Write(Name, state.ToJson());
 }

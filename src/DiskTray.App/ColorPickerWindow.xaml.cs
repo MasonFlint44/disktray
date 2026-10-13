@@ -81,6 +81,8 @@ internal partial class ColorPickerWindow : FluentWindow
             _updating = true;
             Hex.Text = color.ToString();
             _updating = false;
+            // A color picked from the swatches or areas is always one to keep.
+            Ok.IsEnabled = true;
         }
 
         var item = new ItemColor(color);

@@ -79,17 +79,25 @@ public class InterruptedCleanupTests
     }
 
     [Fact]
-    public async Task Leaves_docker_alone_when_its_running_already_or_cant_be_told()
+    public async Task Leaves_docker_alone_when_its_running_already()
     {
-        var marker = new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true);
         _docker.DesktopRunning = true;
-        await Finish(marker);
 
-        _docker.StatusFails = true;
-        _wsl.Unreachable = true;
-        await Finish(marker);
+        await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
 
         Assert.Empty(_docker.Calls);
+    }
+
+    [Fact]
+    public async Task Starts_docker_in_case_its_stopped_when_that_cant_be_told()
+    {
+        _docker.StatusFails = true;
+        _wsl.Unreachable = true;
+
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true, Failed: true));
+
+        Assert.Equal(["desktop start --detach"], _docker.Calls);
+        Assert.EndsWith("DiskTray asked Docker Desktop to start again, in case it had stopped.", said!.Body);
     }
 
     [Fact]

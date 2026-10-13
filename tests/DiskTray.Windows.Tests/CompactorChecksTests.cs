@@ -74,7 +74,7 @@ public partial class PathHoldTests
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Assert.Skip("Making a file symlink needs admin rights or Developer Mode.");
+            Admin.SkipForWantOfRights($"Making a file symlink needs admin rights or Developer Mode ({e.Message}).");
         }
 
         Assert.Null(PathHold.Take(link, out string? problem, out _));
@@ -138,6 +138,26 @@ public partial class PathHoldTests
         Assert.False(inUse);
         Assert.Equal(1234, hold.Size);
         Assert.Null(hold.Changed());
+    }
+
+    /// <summary>
+    /// Anything done to the file while it's held, such as a link put on it and taken off
+    /// again while the virtual disk service opened it: an attribute set and cleared stands in.
+    /// </summary>
+    [Fact]
+    public void Sees_a_held_file_changed_and_changed_back()
+    {
+        using var temp = new TestFolder();
+        string disk = temp.File("ext4.vhdx");
+        using var hold = PathHold.Take(disk, out string? problem, out _);
+        Assert.True(hold is not null, problem);
+        Assert.Null(hold.Changed());
+
+        var attributes = File.GetAttributes(disk);
+        File.SetAttributes(disk, attributes | FileAttributes.Hidden);
+        File.SetAttributes(disk, attributes);
+
+        Assert.Equal("it changed while it was being opened to compact", hold.Changed());
     }
 
     [Fact]
@@ -307,10 +327,67 @@ public class UserAccessTests
         {
             using var temp = new TestFolder();
 
-            using var user = UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem);
+            using var user = UserAccess.OfPipeServer(client.SafePipeHandle, Environment.ProcessPath!, out string? problem);
 
             Assert.Null(problem);
             Assert.True(CanWrite(user!, temp.File("ext4.vhdx")));
+        }
+    }
+
+    /// <summary>
+    /// The DiskTray.exe here is the test helper's relay, the stand-in the Compactor exe's tests
+    /// use, so this also shows that it passes the check and passes everything through.
+    /// </summary>
+    [Fact]
+    public void Takes_requests_from_the_program_it_should_and_the_stand_in_passes_for_it()
+    {
+        using var temp = new TestFolder();
+        string app = TestHelper.CopyInto(temp.Path, "DiskTray.exe");
+        string testPipe = CompactorArgs.NewPipeName(), compactorPipe = CompactorArgs.NewPipeName();
+        using var testEnd = new NamedPipeServerStream(testPipe, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        using var relay = Process.Start(new ProcessStartInfo(app, ["relay", testPipe, compactorPipe]) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+        try
+        {
+            testEnd.WaitForConnection();
+            Assert.Equal("ready", relay.StandardOutput.ReadLine());
+            using var compactorEnd = PipeHost.Connect(compactorPipe, TimeSpan.FromSeconds(15))!;
+
+            using (var user = UserAccess.OfPipeServer(compactorEnd.SafePipeHandle, app, out string? problem))
+            {
+                Assert.True(user is not null, problem);
+            }
+
+            compactorEnd.Write([1, 2]);
+            testEnd.Write([3]);
+            Assert.Equal(1, testEnd.ReadByte());
+            Assert.Equal(2, testEnd.ReadByte());
+            Assert.Equal(3, compactorEnd.ReadByte());
+
+            testEnd.Dispose();
+            Assert.Equal(-1, compactorEnd.ReadByte());
+            Assert.True(relay.WaitForExit(TimeSpan.FromSeconds(15)));
+        }
+        finally
+        {
+            if (!relay.HasExited)
+            {
+                relay.Kill();
+                relay.WaitForExit();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Refuses_a_pipe_made_by_a_program_other_than_the_one_it_takes_requests_from()
+    {
+        var (server, client) = await PipeOwnedBy(WindowsIdentity.GetCurrent().User!);
+        using (server)
+        using (client)
+        {
+            string app = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath)!, "DiskTray.exe");
+
+            Assert.Null(UserAccess.OfPipeServer(client.SafePipeHandle, app, out string? problem));
+            Assert.Equal($"found the program on the other end of the pipe ({Environment.ProcessPath}) isn't the DiskTray.exe beside it", problem);
         }
     }
 
@@ -327,7 +404,7 @@ public class UserAccessTests
         using (server)
         using (client)
         {
-            Assert.Null(UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem));
+            Assert.Null(UserAccess.OfPipeServer(client.SafePipeHandle, Environment.ProcessPath!, out string? problem));
             Assert.Equal("found the pipe wasn't made by the account on its other end", problem);
         }
     }
@@ -590,9 +667,11 @@ public class CompactTests
     }
 
     /// <summary>Starts the Compactor exe as the app does, but without asking for admin, which these tests already have.</summary>
-    private static Process StartCompactor(IEnumerable<string> args)
+    private static Process StartCompactor(IEnumerable<string> args) => StartCompactor(CompactorExe(), args);
+
+    private static Process StartCompactor(string exe, IEnumerable<string> args)
     {
-        var start = new ProcessStartInfo(CompactorExe()) { UseShellExecute = false, CreateNoWindow = true };
+        var start = new ProcessStartInfo(exe) { UseShellExecute = false, CreateNoWindow = true };
         foreach (string arg in args)
         {
             start.ArgumentList.Add(arg);
@@ -601,14 +680,65 @@ public class CompactTests
         return Process.Start(start)!;
     }
 
-    /// <summary>Opens the app's end of the pipe and starts the Compactor on it, as Clean up does.</summary>
-    private static (CompactorLauncher Launcher, Process Compactor) Start(CompactorArgs args)
+    /// <summary>
+    /// A Compactor run as Clean up starts one, from a copy of the Compactor beside a
+    /// stand-in for DiskTray.exe (the test helper's relay), since it only takes requests
+    /// from the DiskTray.exe beside it. The stand-in opens the Compactor's pipe and passes
+    /// everything through to the app's end here, so what the Compactor sends and is sent is
+    /// as it would be. Ends whatever is still running, and removes the copies, on dispose.
+    /// </summary>
+    private sealed class Run : IDisposable
     {
-        var launcher = new CompactorLauncher();
-        launcher.OpenPipe(args.Pipe);
-        var compactor = StartCompactor(args.ToArgs());
-        launcher.Listen(compactor);
-        return (launcher, compactor);
+        private readonly TestFolder _folder = new();
+        private readonly Process _app;
+
+        public Run(CompactorArgs args)
+        {
+            string compactor = CopyCompactor(_folder.Path);
+            string app = TestHelper.CopyInto(_folder.Path, "DiskTray.exe");
+            string compactorPipe = CompactorArgs.NewPipeName();
+
+            Launcher = new CompactorLauncher();
+            Launcher.OpenPipe(args.Pipe);
+            _app = Process.Start(new ProcessStartInfo(app, ["relay", args.Pipe, compactorPipe]) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+            Launcher.Listen(_app);
+            Assert.Equal("ready", _app.StandardOutput.ReadLine());
+            Compactor = StartCompactor(compactor, (args with { Pipe = compactorPipe }).ToArgs());
+        }
+
+        public CompactorLauncher Launcher { get; }
+
+        public Process Compactor { get; }
+
+        public void Dispose()
+        {
+            Launcher.Dispose();
+            foreach (var process in new[] { Compactor, _app })
+            {
+                if (!process.WaitForExit(Timeout))
+                {
+                    process.Kill();
+                    process.WaitForExit(Timeout);
+                }
+
+                process.Dispose();
+            }
+
+            _folder.Dispose();
+        }
+
+        /// <summary>The Compactor's files (just the exe, for the native one) copied into <paramref name="folder"/>.</summary>
+        private static string CopyCompactor(string folder)
+        {
+            string exe = CompactorExe();
+            var from = new DirectoryInfo(Path.GetDirectoryName(exe)!);
+            foreach (var file in from.EnumerateFiles("DiskTray.Compactor.*").Concat(from.EnumerateFiles("DiskTray.Core.*")))
+            {
+                file.CopyTo(Path.Combine(folder, file.Name));
+            }
+
+            return Path.Combine(folder, Path.GetFileName(exe));
+        }
     }
 
     private static string TestDiskIn(TestFolder temp, string relative)
@@ -628,20 +758,16 @@ public class CompactTests
         string one = TestDiskIn(temp, @"docker\disk\docker_data.vhdx");
         string two = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
 
-        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [one, two]));
-        using (launcher)
-        using (compactor)
-        {
-            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-            launcher.Signal(CompactorMessages.Go);
-            var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
+        using var run = new Run(new CompactorArgs(CompactorArgs.NewPipeName(), [one, two]));
+        Statuses.WaitFor(run.Launcher, s => s.State == CompactState.Waiting, Timeout);
+        run.Launcher.Signal(CompactorMessages.Go);
+        var final = Statuses.WaitFor(run.Launcher, s => s.Finished, Timeout);
 
-            Assert.True(final.State == CompactState.Done, final.Message);
-            Assert.Equal([one, two], final.Results!.Select(r => r.Path));
-            Assert.All(final.Results!, r => Assert.Null(r.Problem));
-            Assert.True(compactor.WaitForExit(Timeout));
-            Assert.Equal(0, compactor.ExitCode);
-        }
+        Assert.True(final.State == CompactState.Done, final.Message);
+        Assert.Equal([one, two], final.Results!.Select(r => r.Path));
+        Assert.All(final.Results!, r => Assert.Null(r.Problem));
+        Assert.True(run.Compactor.WaitForExit(Timeout));
+        Assert.Equal(0, run.Compactor.ExitCode);
     }
 
     [Fact]
@@ -654,21 +780,17 @@ public class CompactTests
         var written = File.GetLastWriteTimeUtc(disk);
         long size = new FileInfo(disk).Length;
 
-        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk], DryRun: true));
-        using (launcher)
-        using (compactor)
-        {
-            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-            launcher.Signal(CompactorMessages.Go);
-            var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
+        using var run = new Run(new CompactorArgs(CompactorArgs.NewPipeName(), [disk], DryRun: true));
+        Statuses.WaitFor(run.Launcher, s => s.State == CompactState.Waiting, Timeout);
+        run.Launcher.Signal(CompactorMessages.Go);
+        var final = Statuses.WaitFor(run.Launcher, s => s.Finished, Timeout);
 
-            Assert.Equal(CompactState.Done, final.State);
-            Assert.True(final.DryRun);
-            Assert.Equal(new DiskResult(disk, size, size), Assert.Single(final.Results!));
-            Assert.True(compactor.WaitForExit(Timeout));
-            Assert.Equal(0, compactor.ExitCode);
-            Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
-        }
+        Assert.Equal(CompactState.Done, final.State);
+        Assert.True(final.DryRun);
+        Assert.Equal(new DiskResult(disk, size, size), Assert.Single(final.Results!));
+        Assert.True(run.Compactor.WaitForExit(Timeout));
+        Assert.Equal(0, run.Compactor.ExitCode);
+        Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
     }
 
     [Fact]
@@ -680,19 +802,41 @@ public class CompactTests
         string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
         using var denied = UserAccessTests.DenyWriting(disk);
 
-        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
-        using (launcher)
-        using (compactor)
-        {
-            var first = Statuses.WaitFor(launcher, _ => true, Timeout);
+        using var run = new Run(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        var first = Statuses.WaitFor(run.Launcher, _ => true, Timeout);
 
-            // Its first word, so the app never stops Docker or WSL for it.
-            Assert.Equal(CompactState.Failed, first.State);
-            Assert.StartsWith("Nothing was shut down or compacted.", first.Message);
-            Assert.Contains("the account that asked can't change it", first.Message);
-            Assert.True(compactor.WaitForExit(Timeout));
-            Assert.Equal(3, compactor.ExitCode);
-        }
+        // Its first word, so the app never stops Docker or WSL for it.
+        Assert.Equal(CompactState.Failed, first.State);
+        Assert.StartsWith("Nothing was shut down or compacted.", first.Message);
+        Assert.Contains("the account that asked can't change it", first.Message);
+        Assert.True(run.Compactor.WaitForExit(Timeout));
+        Assert.Equal(3, run.Compactor.ExitCode);
+    }
+
+    /// <summary>
+    /// Started by something other than the DiskTray.exe beside it (this test, with the app's
+    /// own pipe code), it refuses every disk before it says it's ready.
+    /// </summary>
+    [Fact]
+    [Trait("Compactor", "exe")]
+    public void The_compactor_refuses_every_disk_for_a_program_other_than_the_disktray_beside_it()
+    {
+        Admin.SkipUnlessElevated();
+        using var temp = new TestFolder();
+        string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
+        var args = new CompactorArgs(CompactorArgs.NewPipeName(), [disk]);
+
+        using var launcher = new CompactorLauncher();
+        launcher.OpenPipe(args.Pipe);
+        using var compactor = StartCompactor(args.ToArgs());
+        launcher.Listen(compactor);
+        var first = Statuses.WaitFor(launcher, _ => true, Timeout);
+
+        Assert.Equal(CompactState.Failed, first.State);
+        Assert.StartsWith("Nothing was shut down or compacted.", first.Message);
+        Assert.Contains($"found the program on the other end of the pipe ({Environment.ProcessPath}) isn't the DiskTray.exe beside it", first.Message);
+        Assert.True(compactor.WaitForExit(Timeout));
+        Assert.Equal(3, compactor.ExitCode);
     }
 
     [Fact]
@@ -704,16 +848,13 @@ public class CompactTests
         string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
         var written = File.GetLastWriteTimeUtc(disk);
 
-        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
-        using (compactor)
-        {
-            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-            launcher.Dispose();
+        using var run = new Run(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        Statuses.WaitFor(run.Launcher, s => s.State == CompactState.Waiting, Timeout);
+        run.Launcher.Dispose();
 
-            Assert.True(compactor.WaitForExit(Timeout));
-            Assert.Equal(2, compactor.ExitCode);
-            Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
-        }
+        Assert.True(run.Compactor.WaitForExit(Timeout));
+        Assert.Equal(2, run.Compactor.ExitCode);
+        Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
     }
 
     /// <summary>Once told to go, it finishes even if the app exits straight away, as it may once WSL is down.</summary>
@@ -725,16 +866,13 @@ public class CompactTests
         using var temp = new TestFolder();
         string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
 
-        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
-        using (compactor)
-        {
-            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-            launcher.Signal(CompactorMessages.Go);
-            launcher.Dispose();
+        using var run = new Run(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        Statuses.WaitFor(run.Launcher, s => s.State == CompactState.Waiting, Timeout);
+        run.Launcher.Signal(CompactorMessages.Go);
+        run.Launcher.Dispose();
 
-            Assert.True(compactor.WaitForExit(Timeout));
-            Assert.Equal(0, compactor.ExitCode);
-        }
+        Assert.True(run.Compactor.WaitForExit(Timeout));
+        Assert.Equal(0, run.Compactor.ExitCode);
     }
 
     [Fact]

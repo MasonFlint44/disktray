@@ -482,6 +482,40 @@ public class VolumeConfidenceTests
     }
 
     [Fact]
+    public void Says_when_a_project_it_calls_deleted_was_last_seen()
+    {
+        // Cloned again somewhere that isn't searched, and its containers removed before
+        // Clean up saw them there: it looks deleted, so the date has to tell it apart.
+        var seen = new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero);
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["acmeweb-app_devcontainer"] = new("Ubuntu", "/home/me/old/acme.web-app") }, seen);
+        var folders = Folders();
+        folders.Existing.Add("Ubuntu:/home/me/projects/acme.web-app");
+
+        var acme = Group(folders, cache).Single(g => g.Project == "acmeweb-app_devcontainer");
+
+        Assert.Equal(FolderCheck.Deleted, acme.Check);
+        Assert.Equal(seen, acme.LastSeen);
+        Assert.Equal(
+            $"acmeweb-app_devcontainer · folder deleted (~/old/acme.web-app, last seen {seen.ToLocalTime().ToString("d", CultureInfo.InvariantCulture)})",
+            CleanupLayout.GroupLine(acme, CultureInfo.InvariantCulture).Text);
+    }
+
+    [Fact]
+    public void Has_no_last_seen_date_for_a_folder_a_container_shows_now()
+    {
+        var unused = new List<DockerVolume> { new("pg_data", 5L << 30, "pg", "data") };
+        var live = new Dictionary<string, ProjectFolder> { ["pg"] = new("Ubuntu", "/home/me/pg") };
+        var cache = new ProjectFolderCache();
+        cache.Record(live, DateTimeOffset.UnixEpoch);
+
+        var group = Assert.Single(VolumeConfidence.Group(unused, live, cache, [], Folders()));
+
+        Assert.Equal(FolderCheck.Deleted, group.Check);
+        Assert.Null(group.LastSeen);
+    }
+
+    [Fact]
     public void Doesnt_call_a_project_deleted_when_its_other_folder_cant_be_checked()
     {
         // Recorded in Ubuntu (gone); the containers now say Debian, which isn't running.
@@ -499,6 +533,8 @@ public class VolumeConfidenceTests
     [InlineData("acme.web-app", "acmeweb-app")]
     [InlineData("My Project!", "myproject")]
     [InlineData("under_score-dash", "under_score-dash")]
+    [InlineData("_scratch", "scratch")]
+    [InlineData("-.-x", "x")]
     public void Names_projects_the_way_compose_does(string folder, string project) =>
         Assert.Equal(project, VolumeConfidence.ProjectName(folder));
 }
@@ -516,6 +552,40 @@ public class ProjectFolderCacheTests
 
         Assert.Equal(new ProjectFolder("Ubuntu", "/home/me/app"), copy.Get("app"));
         Assert.Null(copy.Get("other"));
+    }
+
+    [Fact]
+    public void Moves_on_when_a_project_was_last_seen_once_a_day()
+    {
+        var cache = new ProjectFolderCache();
+        var app = new Dictionary<string, ProjectFolder> { ["app"] = new("Ubuntu", "/home/me/app") };
+        cache.Record(app, DateTimeOffset.UnixEpoch);
+
+        Assert.False(cache.Record(app, DateTimeOffset.UnixEpoch.AddHours(20)));
+        Assert.Equal(DateTimeOffset.UnixEpoch, cache.SeenAt("app"));
+
+        Assert.True(cache.Record(app, DateTimeOffset.UnixEpoch.AddDays(2)));
+        Assert.Equal(DateTimeOffset.UnixEpoch.AddDays(2), ProjectFolderCache.FromJson(cache.ToJson()).SeenAt("app"));
+
+        // Seen again with its distro assumed: still the recorded folder, seen later.
+        Assert.True(cache.Record(new Dictionary<string, ProjectFolder> { ["app"] = new ProjectFolder("Ubuntu", "/home/me/app") { DistroGuessed = true } }, DateTimeOffset.UnixEpoch.AddDays(4)));
+        Assert.False(cache.Get("app")!.DistroGuessed);
+        Assert.Equal(DateTimeOffset.UnixEpoch.AddDays(4), cache.SeenAt("app"));
+    }
+
+    [Fact]
+    public void Forgets_only_old_projects_with_nothing_left_in_docker()
+    {
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["old"] = new("Ubuntu", "/home/me/old"), ["kept"] = new("Ubuntu", "/home/me/kept") }, DateTimeOffset.UnixEpoch);
+        cache.Record(new Dictionary<string, ProjectFolder> { ["recent"] = new("Ubuntu", "/home/me/recent") }, DateTimeOffset.UnixEpoch + ProjectFolderCache.ForgetAfter);
+
+        Assert.True(cache.Forget(["kept"], DateTimeOffset.UnixEpoch + ProjectFolderCache.ForgetAfter));
+
+        Assert.Null(cache.Get("old"));
+        Assert.NotNull(cache.Get("kept"));
+        Assert.NotNull(cache.Get("recent"));
+        Assert.False(cache.Forget(["kept"], DateTimeOffset.UnixEpoch + ProjectFolderCache.ForgetAfter));
     }
 
     [Fact]
@@ -689,6 +759,20 @@ public class CleanupLayoutTests
     }
 
     [Fact]
+    public void Doesnt_offer_a_prune_with_nothing_to_remove()
+    {
+        // Only dangling images ticked, and there are none.
+        var state = State();
+        var choices = CleanupChoices.Defaults(state) with { BuildCache = false, Volumes = new HashSet<string>(), Compact = false };
+
+        var model = CleanupLayout.Build(state, choices, Invariant);
+
+        Assert.False(model.CanStart);
+        Assert.Equal("Nothing will run", model.Plan);
+        Assert.False(CleanupRequest.From(state, choices, model, dryRun: false).Prunes);
+    }
+
+    [Fact]
     public void Counts_only_the_ticked_prune_items()
     {
         var model = Build(State(), c => c with { BuildCache = false, Volumes = new HashSet<string> { "notes_conda" } });
@@ -734,6 +818,14 @@ public class CleanupLayoutTests
                 "Unsaved work in them is lost.",
             ],
             model.Warning);
+    }
+
+    [Fact]
+    public void Doesnt_count_containers_docker_didnt_list()
+    {
+        var model = Build(State(true, "Ubuntu", "docker-desktop") with { RunningContainers = null }, c => c with { When = CompactWhen.RightAway });
+
+        Assert.Contains("Docker Desktop and whatever it's running", model.Warning);
     }
 
     [Fact]

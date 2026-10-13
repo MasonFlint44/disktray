@@ -40,7 +40,9 @@ internal sealed class TrayController : IDisposable
     private FlyoutWindow? _flyout;
     private SettingsWindow? _settingsWindow;
     private CleanupWindow? _cleanupWindow;
-    private CleanupProgress? _cleanupProgress;
+    private volatile CleanupProgress? _cleanupProgress;
+    private Task<CleanupState>? _cleanupScan;
+    private bool _flyoutWanted;
     private CancellationTokenSource? _cleanupCancel;
 
     // Held from a clean up's start until its Compactor has ended, the wait included.
@@ -157,11 +159,17 @@ internal sealed class TrayController : IDisposable
                 {
                     var pins = _settings.Pins;
                     var detect = new DetectionOptions(_settings.DetectDistros, _settings.DetectDocker);
-                    bool askWsl = _cleanupProgress is not { KeepsWslQuiet: true };
-                    _snapshot = await Task.Run(() => _monitor.Measure(pins, detect, askWsl));
+                    // Asked before each call into WSL, so a refresh that started before a
+                    // clean up got to its wait for WSL leaves it alone from then on too.
+                    _snapshot = await Task.Run(() => _monitor.Measure(pins, detect, () => _cleanupProgress is not { KeepsWslQuiet: true }));
                     _problem = null;
                     Redraw();
                     CheckAlerts(UserIsActive());
+                    if (_flyoutWanted)
+                    {
+                        _flyoutWanted = false;
+                        ShowFlyout();
+                    }
                 }
                 catch (Exception e)
                 {
@@ -261,9 +269,11 @@ internal sealed class TrayController : IDisposable
             _flyout.PinRequested += (_, path) => Pin(path);
         }
 
-        // Nothing to show until the first refresh finishes, which takes about a second.
+        // Nothing to show until the first refresh finishes, which takes about a second; it's
+        // shown then (a notification clicked while DiskTray wasn't running starts it).
         if (_snapshot is null)
         {
+            _flyoutWanted = true;
             return;
         }
 
@@ -366,27 +376,46 @@ internal sealed class TrayController : IDisposable
         var window = new CleanupWindow(snapshot, _settings.Cleanup, _dryRun);
         _cleanupWindow = window;
         window.Started += request => _ = RunCleanupAsync(request, window);
+        window.ScanAgain += () => ScanForAsync(window, _snapshot ?? snapshot, again: true);
         window.Closed += (_, _) => _cleanupWindow = null;
         window.Show();
         window.Activate();
+        await ScanForAsync(window, snapshot, again: false);
+    }
 
+    /// <summary>Asks Docker and WSL what the Clean up dialog needs, and shows it there if it's still open.</summary>
+    private async Task ScanForAsync(CleanupWindow window, DiskSnapshot snapshot, bool again)
+    {
+        CleanupState state;
         try
         {
-            var codeFolders = _settings.CodeFolders;
-            var state = await Task.Run(() => new CleanupScanner(_docker, _wsl).Scan(snapshot, codeFolders));
-            if (_cleanupWindow == window)
-            {
-                window.ShowScan(state);
-            }
+            state = await ScanAsync(snapshot);
         }
         catch (Exception e)
         {
             Log.Error("Couldn't check what Docker can prune", e);
-            if (_cleanupWindow == window)
-            {
-                window.ShowScan(new CleanupState(snapshot, null, [], new HashSet<string>(), 0));
-            }
+            state = new CleanupState(snapshot, null, [], new HashSet<string>(), null) { RunningKnown = false };
         }
+
+        if (_cleanupWindow == window)
+        {
+            window.ShowScan(state, again);
+        }
+    }
+
+    /// <summary>
+    /// The scan, shared with one already going (the dialog closed and opened again while
+    /// Docker was being asked), so two never write projects.json at once.
+    /// </summary>
+    private Task<CleanupState> ScanAsync(DiskSnapshot snapshot)
+    {
+        if (_cleanupScan is { IsCompleted: false } going)
+        {
+            return going;
+        }
+
+        var codeFolders = _settings.CodeFolders;
+        return _cleanupScan = Task.Run(() => new CleanupScanner(_docker, _wsl).Scan(snapshot, codeFolders));
     }
 
     /// <param name="window">The Clean up dialog, left open while the admin prompt is up.</param>
@@ -401,7 +430,7 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        using var launcher = new CompactorLauncher(window.Handle);
+        var launcher = new CompactorLauncher(window.Handle);
         _cleanupCancel = new CancellationTokenSource();
         bool toldCompacting = false;
         var dispatcher = Dispatcher.CurrentDispatcher;
@@ -462,12 +491,28 @@ internal sealed class TrayController : IDisposable
             _cleanupProgress = null;
             _cleanupCancel.Dispose();
             _cleanupCancel = null;
+            // Before the wait below: a Compactor that was never told "go" (the run failed
+            // before then) waits for the pipe to close, and then ends. One that was carries on
+            // without it.
+            launcher.Dispose();
             UpdateCleanupStatus();
         }
 
-        // Its Compactor may still be compacting: the turn lasts until it has ended, as after a restart.
-        await _cleanupTurn.EndAsync(keep is not null, FinishInterruptedCleanupAsync, RefreshAsync);
-        UpdateCleanupStatus();
+        try
+        {
+            // Its Compactor may still be compacting: the turn lasts until it has ended, as after a restart.
+            await _cleanupTurn.EndAsync(keep is not null, FinishInterruptedCleanupAsync, RefreshAsync);
+        }
+        catch (Exception e)
+        {
+            // Nothing awaits this run, so this is the only place it can be told.
+            Log.Error("Finishing the clean up failed", e);
+        }
+        finally
+        {
+            WslExe.LetDistrosRun();
+            UpdateCleanupStatus();
+        }
     }
 
     private void UpdateCleanupStatus()

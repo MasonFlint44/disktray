@@ -25,7 +25,9 @@ internal static class IconPreview
     {
         Directory.CreateDirectory(folder);
         var settings = SettingsFile.Load();
-        var snapshot = monitor.Measure(settings.Pins);
+        // From the last readings, without asking WSL: the running copy may be in the middle
+        // of a clean up, which a df here could undo by starting a distro again.
+        var snapshot = monitor.Measure(settings.Pins, mayAskWsl: () => false);
         var thresholds = settings.Thresholds;
         var models = TrayLayout.Build(snapshot, thresholds, pins: settings.Pins).ToList();
         models.Add(Sample("sample-reclaimable", AlertLevel.Normal));

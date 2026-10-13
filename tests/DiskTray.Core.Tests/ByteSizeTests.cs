@@ -44,4 +44,12 @@ public class ByteSizeTests
     [InlineData(1.0, "100%")]
     public void Formats_percentages(double fraction, string expected) =>
         Assert.Equal(expected, ByteSize.FormatPercent(fraction, CultureInfo.InvariantCulture));
+
+    [Theory]
+    [InlineData(0.146, 0.15, "14%")]
+    [InlineData(0.10673, 0.15, "11%")]
+    [InlineData(0.0499, 0.05, "4%")]
+    [InlineData(0.007, 0.01, "<1%")]
+    public void Never_rounds_up_to_the_level_its_below(double fraction, double level, string expected) =>
+        Assert.Equal(expected, ByteSize.FormatPercent(fraction, CultureInfo.InvariantCulture, level));
 }

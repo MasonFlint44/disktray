@@ -36,8 +36,29 @@ public class PieChartTests
     [Fact]
     public void Mixes_colors() => Assert.Equal(Rgb.FromHex("#F4AA90"), Palette.Wsl.Main.Mix(Rgb.White, 0.5));
 
-    [Fact]
-    public void Rejects_bad_colors() => Assert.Throws<FormatException>(() => Rgb.FromHex("#12345"));
+    [Theory]
+    [InlineData("#12345")]
+    [InlineData("#12345 ")]
+    [InlineData("# 12345")]
+    [InlineData("#12345G")]
+    public void Rejects_bad_colors(string hex) => Assert.Throws<FormatException>(() => Rgb.FromHex(hex));
+
+    [Theory]
+    [InlineData("#1a2B3c", true)]
+    [InlineData("1A2B3C", false)]
+    [InlineData("#1A2B3 ", false)]
+    [InlineData("", false)]
+    public void Takes_only_hash_colors_for_pins(string text, bool expected) => Assert.Equal(expected, TrayPin.IsColor(text));
+
+    [Theory]
+    [InlineData(@"D:\VMs", true)]
+    [InlineData(@"d:\", true)]
+    [InlineData(@"D:", false)]
+    [InlineData(@"D:VMs", false)]
+    [InlineData(@"\\wsl.localhost\Ubuntu\home", false)]
+    [InlineData(@"\\server\share", false)]
+    [InlineData(@"1:\x", false)]
+    public void Pins_only_local_paths(string path, bool expected) => Assert.Equal(expected, TrayPin.IsLocalPath(path));
 
     [Theory]
     [InlineData("#FF0000", 0, 1, 1)]
@@ -210,6 +231,19 @@ public class TrayLayoutTests
         Assert.EndsWith("…", icons[1].ToolTip);
         // The drive icon drops its breakdown line rather than cutting off the free-space line.
         Assert.Equal("Drive C: · 472 GiB\nC: 50 GiB free (11%) – below 15% warning", icons[2].ToolTip);
+    }
+
+    [Fact]
+    public void Never_cuts_a_tooltip_in_the_middle_of_an_emoji()
+    {
+        // The cut would fall between the emoji's two halves.
+        string name = new string('x', TrayLayout.MaxToolTipLength - 2) + "😀😀";
+
+        string tip = TrayLayout.ToolTip(name);
+
+        Assert.True(tip.Length <= TrayLayout.MaxToolTipLength);
+        Assert.False(char.IsHighSurrogate(tip[^2]));
+        Assert.EndsWith("x…", tip);
     }
 }
 

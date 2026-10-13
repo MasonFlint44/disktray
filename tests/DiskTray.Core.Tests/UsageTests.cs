@@ -66,6 +66,9 @@ public class WslOutputTests
         // Timed out or didn't start, or failed with one of WSL's error codes.
         Assert.Null(WslOutput.ParseRunningDistros(null, null));
         Assert.Null(WslOutput.ParseRunningDistros("Catastrophic failure\r\nError code: Wsl/Service/E_UNEXPECTED\r\n", -1));
+        // Older WSL's own error codes, and a failure that says nothing.
+        Assert.Null(WslOutput.ParseRunningDistros("The virtual machine could not be started.\r\nError: 0x80370102\r\n", -1));
+        Assert.Null(WslOutput.ParseRunningDistros("", 1));
     }
 }
 
@@ -132,6 +135,26 @@ public class UsageCacheTests
         cache.RetainOnly([], Reading.MeasuredAt.AddDays(40));
         Assert.True(cache.Changed);
         Assert.False(UsageCache.FromJson(cache.ToJson()).Changed);
+    }
+
+    [Fact]
+    public void Saves_a_reading_that_only_moved_on_in_time_once_an_hour()
+    {
+        var cache = new UsageCache();
+        cache.Set(@"C:.vhdx", Reading);
+        cache.MarkSaved();
+
+        // A refresh every few minutes while the distro runs, finding the same.
+        cache.Set(@"C:.vhdx", Reading with { MeasuredAt = Reading.MeasuredAt.AddMinutes(5) });
+        Assert.False(cache.Changed);
+        Assert.Equal(Reading.MeasuredAt.AddMinutes(5), cache.Get(@"C:.vhdx")!.MeasuredAt);
+
+        cache.Set(@"C:.vhdx", Reading with { MeasuredAt = Reading.MeasuredAt.AddHours(1) });
+        Assert.True(cache.Changed);
+        cache.MarkSaved();
+
+        cache.Set(@"C:.vhdx", Reading with { UsedBytes = 35, MeasuredAt = Reading.MeasuredAt.AddHours(1).AddMinutes(5) });
+        Assert.True(cache.Changed);
     }
 
     [Fact]
@@ -225,6 +248,38 @@ public class UsageMeterTests
     }
 
     [Fact]
+    public void Starts_counting_growth_again_from_a_compacted_file()
+    {
+        // Measured at 36 GiB in a 129 GiB file, then compacted down to 36 GiB, and since
+        // grown to 56 GiB with Docker never measured: all 20 GiB of growth is in use.
+        var wsl = new FakeWslCommands();
+        var cache = new UsageCache();
+        var snapshot = Machine.Scan();
+        var docker = snapshot.Docker!;
+        cache.Set(docker.Path, new UsageReading(36L << 30, 129L << 30, Now.AddDays(-1)));
+
+        Measure(wsl, cache, snapshot with { Files = [docker with { SizeBytes = 36L << 30 }] });
+        var grown = Measure(wsl, cache, snapshot with { Files = [docker with { SizeBytes = 56L << 30 }] }).Docker!;
+
+        Assert.Equal(56L << 30, grown.UsedBytes);
+        Assert.Equal(0, grown.ReclaimableBytes);
+        Assert.Equal(new UsageReading(36L << 30, 36L << 30, Now.AddDays(-1)), cache.Get(docker.Path));
+    }
+
+    [Fact]
+    public void Never_counts_more_in_use_than_a_shrunk_file_holds()
+    {
+        var cache = new UsageCache();
+        var snapshot = Machine.Scan();
+        var docker = snapshot.Docker!;
+        cache.Set(docker.Path, new UsageReading(40L << 30, 129L << 30, Now.AddDays(-1)));
+
+        var measured = Measure(new FakeWslCommands(), cache, snapshot with { Files = [docker with { SizeBytes = 30L << 30 }] }).Docker!;
+
+        Assert.Equal(30L << 30, measured.UsedBytes);
+    }
+
+    [Fact]
     public void Keeps_the_last_reading_when_df_fails()
     {
         var wsl = RunningWsl();
@@ -269,11 +324,29 @@ public class UsageMeterTests
         var cache = new UsageCache();
         cache.Set(Machine.DockerData, new UsageReading(30_000_000_000, Machine.DockerSize, Now.AddHours(-1)));
 
-        var snapshot = new UsageMeter(wsl, cache, new FixedClock(Now)).Measure(Machine.Scan(), askWsl: false);
+        var snapshot = new UsageMeter(wsl, cache, new FixedClock(Now)).Measure(Machine.Scan(), () => false);
 
         Assert.Empty(wsl.Calls);
         Assert.Equal(30_000_000_000, snapshot.Docker?.UsedBytes);
         Assert.Equal(Now.AddHours(-1), snapshot.Docker?.UsedAsOf);
+    }
+
+    [Fact]
+    public void Stops_asking_wsl_as_soon_as_it_has_to_leave_it_alone()
+    {
+        // A clean up gets to its wait for WSL while this refresh is going.
+        var wsl = RunningWsl();
+        bool cleanupWaiting = false;
+        int asked = 0;
+
+        new UsageMeter(wsl, new UsageCache(), new FixedClock(Now)).Measure(Machine.Scan(), () =>
+        {
+            cleanupWaiting = ++asked > 1;
+            return !cleanupWaiting;
+        });
+
+        Assert.True(cleanupWaiting);
+        Assert.Empty(wsl.Calls);
     }
 
     [Fact]

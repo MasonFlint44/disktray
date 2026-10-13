@@ -41,6 +41,22 @@ internal static partial class LinkSafePath
         !GetFileInformationByHandle(handle, out var info) || (info.Attributes & ReparsePointAttribute) != 0;
 
     /// <summary>
+    /// The file's update sequence number: NTFS moves it on for every change to the file, its
+    /// data or its attributes (a reparse point put on it and taken off again included), and
+    /// unlike the file's times it can't be set back. Null when it can't be read, as on a
+    /// volume without a change journal.
+    /// </summary>
+    public static unsafe long? ChangeNumber(SafeFileHandle handle)
+    {
+        // READ_FILE_USN_DATA asking for a version 2 record, whose Usn is 24 bytes in.
+        uint versions = 2 | (2u << 16);
+        byte* record = stackalloc byte[1024];
+        return DeviceIoControl(handle, ReadFileUsnData, &versions, sizeof(uint), record, 1024, out uint returned, 0) && returned >= 32
+            ? *(long*)(record + 24)
+            : null;
+    }
+
+    /// <summary>
     /// Whether the handle's real path is exactly <paramref name="path"/>: no link, short
     /// name, or drive letter that leads somewhere else (one made with <c>subst</c>, say) on
     /// the way. A path on a network share never is.
@@ -90,6 +106,12 @@ internal static partial class LinkSafePath
 
         public readonly long Size => ((long)FileSizeHigh << 32) | FileSizeLow;
     }
+
+    private const uint ReadFileUsnData = 0x0009_00EB;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static unsafe partial bool DeviceIoControl(SafeFileHandle device, uint code, void* input, uint inputSize, void* output, uint outputSize, out uint returned, nint overlapped);
 
     [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
     private static partial SafeFileHandle CreateFile(string path, uint access, uint share, nint security, uint disposition, uint flags, nint template);

@@ -1,5 +1,6 @@
 using System.Globalization;
 using DiskTray.Core.Settings;
+using DiskTray.Core.Tray;
 
 namespace DiskTray.Core.Tests;
 
@@ -42,11 +43,59 @@ public class AppSettingsTests
     [Theory]
     [InlineData(null)]
     [InlineData("")]
+    public void Uses_the_defaults_when_there_is_no_file(string? json)
+    {
+        var (settings, dropped) = AppSettings.Read(json);
+
+        Assert.Equal(new AppSettings(), settings);
+        Assert.Empty(dropped);
+    }
+
+    [Theory]
     [InlineData("not json")]
     [InlineData("[1, 2]")]
-    [InlineData("""{ "theme": "purple" }""")]
-    [InlineData("""{ "cleanupCompactWhen": "someday" }""")]
-    public void Uses_the_defaults_when_the_file_is_unusable(string? json) => Assert.Equal(new AppSettings(), AppSettings.FromJson(json));
+    [InlineData("""{ "theme": "dark", """)]
+    public void Uses_the_defaults_when_the_file_is_unusable_but_leaves_startup_apps_alone(string json)
+    {
+        var (settings, dropped) = AppSettings.Read(json);
+
+        Assert.Equal(new AppSettings { StartupRegistered = true }, settings);
+        Assert.Equal(["the whole file"], dropped);
+    }
+
+    [Fact]
+    public void Keeps_everything_else_when_one_value_cant_be_read()
+    {
+        var (settings, dropped) = AppSettings.Read("""
+            {
+              "theme": "purple",
+              "warningPercent": 20,
+              "cleanupCompactWhen": "someday",
+              "reminderTime": "soon",
+              "refreshMinutes": "often",
+              "codeFolders": ["C:\\code"],
+              "pins": [{ "kind": "drive", "target": "D:\\" }, { "kind": "sparkly" }],
+              "startupRegistered": false
+            }
+            """);
+
+        Assert.Equal(["theme", "cleanupCompactWhen", "reminderTime", "refreshMinutes", "some of pins"], dropped);
+        Assert.Equal(AppTheme.System, settings.Theme);
+        Assert.Equal(20, settings.WarningPercent);
+        Assert.Equal(5, settings.RefreshMinutes);
+        Assert.Equal([@"C:\code"], settings.CodeFolders);
+        Assert.Equal([new TrayPin(PinKind.Drive, @"D:\")], settings.Pins);
+        Assert.False(settings.StartupRegistered);
+    }
+
+    [Fact]
+    public void Counts_a_startup_apps_value_it_cant_read_as_done()
+    {
+        var (settings, dropped) = AppSettings.Read("""{ "startupRegistered": "maybe", "theme": "dark" }""");
+
+        Assert.Equal(["startupRegistered"], dropped);
+        Assert.Equal(new AppSettings { Theme = AppTheme.Dark, StartupRegistered = true }, settings);
+    }
 
     [Fact]
     public void Keeps_good_values_and_resets_bad_ones()

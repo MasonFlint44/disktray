@@ -42,6 +42,55 @@ public class HiddenProcessTests
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"Took {clock.Elapsed}.");
     }
 
+    [Fact]
+    public void Leaves_what_a_program_started_running_when_asked_to()
+    {
+        using var linger = new Linger();
+
+        // cmd waits on what it started, as docker desktop start might on Docker Desktop.
+        var (_, failure, _) = HiddenProcess.RunToEnd(Cmd, ["/c", linger.Exe, "linger", "30"], TimeSpan.FromSeconds(2), killTree: false);
+
+        Assert.Equal("timed out after 2 s", failure);
+        Assert.NotEmpty(linger.Running());
+    }
+
+    /// <summary>
+    /// The test helper's linger, under a name of its own, so what a test leaves running
+    /// (started by what it ran, so the test never has it) can be found, and ended, without
+    /// touching anything else. Ended and removed on dispose.
+    /// </summary>
+    private sealed class Linger : IDisposable
+    {
+        private readonly TestFolder _folder = new();
+        private readonly string _name = "linger-" + Guid.NewGuid().ToString("N");
+
+        public Linger() => Exe = TestHelper.CopyInto(_folder.Path, _name + ".exe");
+
+        public string Exe { get; }
+
+        public Process[] Running() => Process.GetProcessesByName(_name);
+
+        public void Dispose()
+        {
+            foreach (var process in Running())
+            {
+                try
+                {
+                    process.Kill();
+                    process.WaitForExit(TimeSpan.FromSeconds(10));
+                }
+                catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+                {
+                    // Ended on its own just now.
+                }
+
+                process.Dispose();
+            }
+
+            _folder.Dispose();
+        }
+    }
+
     /// <summary>
     /// A program that has exited while something it started still holds its output open: the
     /// wait for the output counts against the same timeout, rather than lasting as long as that does.
@@ -49,9 +98,10 @@ public class HiddenProcessTests
     [Fact]
     public void Doesnt_wait_past_the_timeout_for_output_something_it_started_keeps_open()
     {
+        using var linger = new Linger();
         var clock = Stopwatch.StartNew();
 
-        var (_, failure, _) = HiddenProcess.RunToEnd(Cmd, ["/c", "start", "/b", Ping, "-n", "8", "127.0.0.1"], TimeSpan.FromSeconds(2));
+        var (_, failure, _) = HiddenProcess.RunToEnd(Cmd, ["/c", "start", "/b", linger.Exe, "linger", "8"], TimeSpan.FromSeconds(2));
 
         Assert.Equal("timed out after 2 s", failure);
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(6), $"Took {clock.Elapsed}.");

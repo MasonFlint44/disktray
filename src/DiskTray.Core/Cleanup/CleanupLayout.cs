@@ -17,12 +17,13 @@ public enum CompactWhen
 /// <summary>What the machine looks like when the Clean up dialog opens.</summary>
 /// <param name="Docker">What a prune could remove, or null when Docker Desktop isn't running or didn't say.</param>
 /// <param name="RunningDistros">The WSL distros running now, Docker's own included.</param>
+/// <param name="RunningContainers">How many containers are running, or null when Docker didn't say.</param>
 public sealed record CleanupState(
     DiskSnapshot Snapshot,
     DockerDiskUsage? Docker,
     IReadOnlyList<VolumeGroup> VolumeGroups,
     IReadOnlySet<string> RunningDistros,
-    int RunningContainers)
+    int? RunningContainers)
 {
     /// <summary>Whether Docker said what can be pruned, which the prune step needs.</summary>
     public bool CanPrune => Docker is not null;
@@ -94,6 +95,21 @@ public sealed record CleanupChoices(
         defaults.StartDockerAfter && when == CompactWhen.RightAway && (state.DesktopRunning ?? state.CanPrune);
 }
 
+/// <summary>
+/// What a prune would do with what's ticked: only what's there to remove, and nothing when
+/// Docker didn't say what can be pruned. Both the dialog and the run go by this, so the
+/// dialog never offers a prune that would do nothing.
+/// </summary>
+public sealed record PruneSteps(bool BuildCache, bool DanglingImages, IReadOnlyList<DockerVolume> Volumes)
+{
+    public bool Any => BuildCache || DanglingImages || Volumes.Count > 0;
+
+    public static PruneSteps From(CleanupState state, CleanupChoices choices) =>
+        choices.Prune && state.Docker is { } docker
+            ? new(choices.BuildCache, choices.DanglingImages && docker.DanglingImages > 0, docker.UnusedVolumes.Where(v => choices.Volumes.Contains(v.Name)).ToList())
+            : new(false, false, []);
+}
+
 /// <summary>A disk file to compact, with roughly how big it'll be afterwards when that's known.</summary>
 public sealed record CompactTarget(DiskFile File, long? AfterBytes)
 {
@@ -134,13 +150,12 @@ public static class CleanupLayout
         string Size(long bytes) => ByteSize.Format(bytes, provider);
 
         var docker = state.Docker;
-        bool prune = choices.Prune && docker is not null;
         var volumes = docker?.UnusedVolumes.Where(v => choices.Volumes.Contains(v.Name)).ToList() ?? [];
-        long buildCache = prune && choices.BuildCache ? docker!.BuildCacheBytes : 0;
-        long dangling = prune && choices.DanglingImages ? docker!.DanglingImageBytes : 0;
-        long volumeBytes = prune ? volumes.Sum(v => v.SizeBytes) : 0;
-        long pruneBytes = buildCache + dangling + volumeBytes;
-        bool pruneHasWork = prune && (choices.BuildCache || choices.DanglingImages || volumes.Count > 0);
+        var prunes = PruneSteps.From(state, choices);
+        long pruneBytes = (prunes.BuildCache ? docker!.BuildCacheBytes : 0)
+            + (prunes.DanglingImages ? docker!.DanglingImageBytes : 0)
+            + prunes.Volumes.Sum(v => v.SizeBytes);
+        bool pruneHasWork = prunes.Any;
 
         var compactable = Targets(state.Snapshot, pruneBytes);
         var targets = choices.Compact ? compactable : [];
@@ -198,13 +213,18 @@ public static class CleanupLayout
                     : null))
             .ToList();
 
-    /// <summary>The heading over a group of unused volumes, e.g. "acmeweb-app · folder deleted (~/git/acme.web-app)".</summary>
+    /// <summary>
+    /// The heading over a group of unused volumes, e.g. "acmeweb-app · folder deleted
+    /// (~/git/acme.web-app, last seen 9/3/2026)".
+    /// </summary>
     public static VolumeGroupLine GroupLine(VolumeGroup group, IFormatProvider? provider = null)
     {
         provider ??= CultureInfo.CurrentCulture;
         string where = group.Searched.Count > 0 ? string.Join(", ", group.Searched.Select(f => f.Display)) : "your code folders";
         string text = group.Check switch
         {
+            FolderCheck.Deleted when group.LastSeen is { } seen =>
+                $"{group.Project} · folder deleted ({group.Folder!.Display}, last seen {seen.ToLocalTime().ToString("d", provider)})",
             FolderCheck.Deleted => $"{group.Project} · folder deleted ({group.Folder!.Display})",
             FolderCheck.Exists when group.Guessed => $"{group.Project} · folder exists ({group.Folder!.Display}, matched by name)",
             FolderCheck.Exists => $"{group.Project} · folder exists ({group.Folder!.Display})",
@@ -310,7 +330,9 @@ public static class CleanupLayout
 
         if (state.DesktopMayRun)
         {
-            lines.Add($"Docker Desktop – {Count(state.RunningContainers, "container")} running");
+            lines.Add(state.RunningContainers is { } containers
+                ? $"Docker Desktop – {Count(containers, "container")} running"
+                : "Docker Desktop and whatever it's running");
         }
 
         if (lines.Count == 0)

@@ -15,6 +15,10 @@
          the installer's copy; development copies publish with PublishAot=false. -->
     <PublishAot>true</PublishAot>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- No lock file: its only packages are the NativeAOT compiler and the trimmer, which come
+         with the .NET SDK (its version is the SDK's), and the compiler's own package differs
+         by the OS that builds it, so a lock file written on Linux wouldn't match Windows'. -->
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DiskTray.Core/DiskTray.Core.csproj" />

@@ -103,16 +103,21 @@ public sealed class InterruptedCleanup(
         }
 
         string? status = await Task.Run(() => docker.Run(DockerOutput.DesktopStatusCommand, TimeSpan.FromSeconds(20)));
-        if (DockerOutput.DesktopRunning(true, status, await Task.Run(wsl.RunningDistros)) != false)
+        bool? running = DockerOutput.DesktopRunning(true, status, await Task.Run(wsl.RunningDistros));
+        if (running == true)
         {
-            // Already running again, or it can't be told: either way, not started twice.
+            // Already running again.
             return marker.Failed ? null : Notice(what + ".");
         }
 
-        log("Starting Docker Desktop, as the unfinished clean up would have");
+        // When it can't be told, it's started in case it's stopped, as a run does after a
+        // stop it can't check on: starting one that's running does no harm.
+        log(running is null
+            ? "Starting Docker Desktop in case it's stopped (its state couldn't be read), as the unfinished clean up would have"
+            : "Starting Docker Desktop, as the unfinished clean up would have");
         bool started = await Task.Run(() => docker.Run(DockerOutput.DesktopStartCommand, CleanupRun.DesktopTimeout) is not null);
         return Notice(started
-            ? what + ". DiskTray has started Docker Desktop again."
+            ? what + (running is null ? ". DiskTray asked Docker Desktop to start again, in case it had stopped." : ". DiskTray has started Docker Desktop again.")
             : what + ", and DiskTray couldn't start Docker Desktop again. Start it yourself.");
     }
 }

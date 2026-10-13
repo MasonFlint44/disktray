@@ -22,6 +22,8 @@
     <ProjectReference Include="../../src/DiskTray.Core/DiskTray.Core.csproj" />
     <ProjectReference Include="../../src/DiskTray.App/DiskTray.App.csproj" />
     <ProjectReference Include="../../src/DiskTray.Compactor/DiskTray.Compactor.csproj" />
+    <!-- What the Compactor exe's tests put beside it as DiskTray.exe, and HiddenProcess's leave running. -->
+    <ProjectReference Include="../DiskTray.TestHelper/DiskTray.TestHelper.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="xunit.v3" Version="4.0.2" />

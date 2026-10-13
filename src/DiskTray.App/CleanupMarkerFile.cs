@@ -5,13 +5,14 @@ namespace DiskTray.App;
 
 /// <summary>
 /// Keeps the <see cref="CleanupMarker"/> in <c>%LOCALAPPDATA%\DiskTray\cleanup-running.json</c>
-/// while a clean up has Docker or WSL stopped.
+/// while a clean up has Docker or WSL stopped, and after the run returns while its
+/// Compactor may still be going (it stopped answering, or the run ended with an error).
 /// </summary>
 internal static class CleanupMarkerFile
 {
     private const string Name = "cleanup-running.json";
 
-    public static CleanupMarker? Load() => CleanupMarker.FromJson(AppDataFile.Read(Name));
+    public static CleanupMarker? Load() => CleanupMarker.FromJson(AppDataFile.ReadJson(Name));
 
     public static void Save(CleanupMarker marker) => AppDataFile.Write(Name, marker.ToJson());
 

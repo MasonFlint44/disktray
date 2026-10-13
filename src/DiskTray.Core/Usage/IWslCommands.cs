@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace DiskTray.Core.Usage;
 
 /// <summary>Runs <c>wsl.exe</c>. Implemented in the app, since WSL is Windows-only.</summary>
@@ -14,7 +16,7 @@ public interface IWslCommands
 }
 
 /// <summary>Reads the output of the WSL commands DiskTray runs.</summary>
-public static class WslOutput
+public static partial class WslOutput
 {
     /// <summary>
     /// The names printed by <c>wsl.exe --list --running --quiet</c>, one per line. Use
@@ -32,16 +34,24 @@ public static class WslOutput
 
     /// <summary>
     /// The running distros from <c>wsl.exe --list --running --quiet</c>, or null when WSL
-    /// couldn't say: it timed out or didn't start (no exit code), or it failed with one of its
-    /// error codes ("Wsl/Service/…"). With none running it exits non-zero without one.
+    /// couldn't say: it timed out or didn't start (no exit code), it failed with one of its
+    /// error codes ("Wsl/Service/…", or the "0x80370102" kind older WSL gives), or it failed
+    /// without a word. With none running it exits non-zero, saying so without a code.
     /// </summary>
-    public static IReadOnlySet<string>? ParseRunningDistros(string? output, int? exitCode) => exitCode switch
+    public static IReadOnlySet<string>? ParseRunningDistros(string? output, int? exitCode)
     {
-        null => null,
-        0 => ParseDistroNames(output ?? ""),
-        _ when (output ?? "").Replace("\0", "", StringComparison.Ordinal).Contains("Wsl/", StringComparison.Ordinal) => null,
-        _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-    };
+        string text = (output ?? "").Replace("\0", "", StringComparison.Ordinal);
+        return exitCode switch
+        {
+            null => null,
+            0 => ParseDistroNames(text),
+            _ when string.IsNullOrWhiteSpace(text) || text.Contains("Wsl/", StringComparison.Ordinal) || ErrorCode().IsMatch(text) => null,
+            _ => new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    [GeneratedRegex("0x[0-9a-fA-F]{8}")]
+    private static partial Regex ErrorCode();
 
     /// <summary>The <c>df</c> command whose output <see cref="ParseUsedBytes"/> reads.</summary>
     public static IReadOnlyList<string> DfCommand(string mountPoint) => ["df", "-P", "-B1", mountPoint];

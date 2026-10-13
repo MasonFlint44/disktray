@@ -42,7 +42,11 @@ public interface ICompactorLauncher
     /// <summary>Whether the Compactor has ended or hung up.</summary>
     bool HasExited { get; }
 
-    /// <summary>The last status the Compactor sent, or null before the first.</summary>
+    /// <summary>
+    /// The last status the Compactor sent, or null before the first. A new object for each
+    /// status read off the pipe, even one that says the same as the last: that's how a run
+    /// tells a Compactor still reporting from one gone quiet.
+    /// </summary>
     CompactStatus? ReadStatus();
 
     /// <summary>Sends <see cref="CompactorMessages.Go"/> or <see cref="CompactorMessages.Cancel"/>.</summary>
@@ -75,11 +79,11 @@ public sealed record CleanupRequest(
 
     public static CleanupRequest From(CleanupState state, CleanupChoices choices, CleanupModel model, bool dryRun)
     {
-        bool prune = choices.Prune && state.Docker is not null;
+        var prunes = PruneSteps.From(state, choices);
         return new CleanupRequest(
-            prune && choices.BuildCache,
-            prune && choices.DanglingImages && state.Docker!.DanglingImages > 0,
-            prune ? state.Docker!.UnusedVolumes.Where(v => choices.Volumes.Contains(v.Name)).ToList() : [],
+            prunes.BuildCache,
+            prunes.DanglingImages,
+            prunes.Volumes,
             model.ToCompact,
             choices.When,
             choices.Compact && choices.StartDockerAfter,
@@ -252,7 +256,8 @@ public sealed record CleanupResult(
 /// Carries out a clean up: gets the elevated Compactor going (it waits), prunes Docker, then
 /// stops Docker Desktop and shuts down WSL (right away, or once nothing is running) before
 /// telling the Compactor to compact. Nothing is stopped unless the Compactor is running and
-/// has said it's ready, which it only does when it will compact at least one of the disks.
+/// has said it's ready, which it only does when it will compact at least one of the disks,
+/// and WSL isn't shut down unless it's still running after Docker Desktop has stopped.
 /// Docker Desktop is started again at the end if asked, from here rather than the Compactor,
 /// so it doesn't run with admin rights.
 /// </summary>
@@ -292,9 +297,14 @@ public sealed class CleanupRun(
         {
             progress.Report(new CleanupProgress(CleanupStep.AskingForAdmin, "Waiting for admin permission to compact"));
             var paths = disks.Select(d => d.File.Path).ToList();
-            notCompacting = await Task.Run(() => compactor.Start(paths, request.DryRun)) is { } notStarted
-                ? $"Nothing was compacted, because {notStarted}."
-                : await WaitForCompactorAsync();
+            if (await Task.Run(() => compactor.Start(paths, request.DryRun)) is { } notStarted)
+            {
+                notCompacting = $"Nothing was compacted, because {notStarted}.";
+            }
+            else
+            {
+                notCompacting = await WaitForCompactorAsync();
+            }
         }
 
         var (pruned, pruneProblems) = request.Prunes ? await PruneAsync(request, progress) : (0, []);
@@ -330,6 +340,18 @@ public sealed class CleanupRun(
         else if (await StopDesktopAsync(request, progress) is { } notStopped)
         {
             return Result(null, notStopped);
+        }
+
+        // Stopping Docker Desktop, or the last checks for idle, can take minutes: the
+        // Compactor has to be there still before WSL is shut down for it.
+        if (compactor.HasExited)
+        {
+            if (request.When == CompactWhen.RightAway)
+            {
+                await StartDockerAgainAsync(request, progress);
+            }
+
+            return Result(compactor.ReadStatus(), "The Compactor closed before compacting, so WSL wasn't shut down. See the log for details.");
         }
 
         progress.Report(new CleanupProgress(CleanupStep.ShuttingDownWsl, "Shutting down WSL"));
@@ -409,13 +431,16 @@ public sealed class CleanupRun(
         }
     }
 
+    /// <summary>Tells of each milestone once, the first time the run gets to it.</summary>
     private void Reached(CleanupRequest request, CleanupMilestone point)
     {
-        if (!request.DryRun)
+        if (!request.DryRun && _reached.Add(point))
         {
             milestone?.Invoke(point);
         }
     }
+
+    private readonly HashSet<CleanupMilestone> _reached = [];
 
     /// <summary>Starts Docker Desktop if the run was asked to, whether compacting worked or not.</summary>
     private async Task StartDockerAgainAsync(CleanupRequest request, IProgress<CleanupProgress> progress)
@@ -512,6 +537,8 @@ public sealed class CleanupRun(
             await delay(StatusInterval, CancellationToken.None);
         }
 
+        // It may yet get going; it's never to compact for this run.
+        compactor.Signal(CompactorMessages.Cancel);
         return "The Compactor didn't start.";
     }
 

@@ -14,4 +14,12 @@ public sealed record AlertThresholds(double WarningFreeFraction = 0.15, double C
         drive.FreeFraction < CriticalFreeFraction ? AlertLevel.Critical
         : drive.FreeFraction < WarningFreeFraction ? AlertLevel.Warning
         : AlertLevel.Normal;
+
+    /// <summary>The free fraction below which the drive is at <paramref name="level"/>, or null for <see cref="AlertLevel.Normal"/>.</summary>
+    public double? FractionFor(AlertLevel level) => level switch
+    {
+        AlertLevel.Critical => CriticalFreeFraction,
+        AlertLevel.Warning => WarningFreeFraction,
+        _ => null,
+    };
 }

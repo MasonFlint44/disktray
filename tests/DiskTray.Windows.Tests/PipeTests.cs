@@ -136,24 +136,30 @@ public class PipeTests
     }
 
     [Fact]
-    public void Hangs_up_on_anything_but_the_process_it_started()
+    public void Hangs_up_on_anything_but_the_process_it_started_and_keeps_waiting_for_that()
     {
-        // Listening for a process that isn't this one, which connects anyway.
-        var (launcher, host, _) = Connect(clientId: 4);
-        using (launcher)
-        using (host)
+        using var launcher = new CompactorLauncher();
+        string name = CompactorArgs.NewPipeName();
+        launcher.OpenPipe(name);
+        launcher.Listen(Environment.ProcessId);
+
+        // Another program of this account's gets there first; it ends once it's hung up on.
+        string script = $"$p = [IO.Pipes.NamedPipeClientStream]::new('.', '{name}', [IO.Pipes.PipeDirection]::InOut); $p.Connect(10000); exit ($p.ReadByte() + 1)";
+        using var other = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"), ["-NoProfile", "-Command", script])
         {
-            host.Report(new CompactStatus(CompactState.Waiting));
+            CreateNoWindow = true,
+            UseShellExecute = false,
+        })!;
+        Assert.True(other.WaitForExit(Timeout), "The other program wasn't hung up on.");
+        Assert.Equal(0, other.ExitCode);
+        Assert.False(launcher.HasExited);
 
-            var until = DateTime.UtcNow + Timeout;
-            while (!launcher.HasExited && DateTime.UtcNow < until)
-            {
-                Thread.Sleep(50);
-            }
+        // The Compactor still gets through.
+        var pipe = PipeHost.Connect(name, Timeout) ?? throw new InvalidOperationException("Couldn't connect to the pipe.");
+        using var host = new PipeHost(pipe, null, "isn't asked in this test");
+        host.Report(new CompactStatus(CompactState.Waiting));
 
-            Assert.True(launcher.HasExited);
-            Assert.Null(launcher.ReadStatus());
-        }
+        Assert.Equal(CompactState.Waiting, Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout).State);
     }
 
     [Fact]

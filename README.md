@@ -46,7 +46,10 @@ Download the MSI from [Releases](../../releases) and run it. It installs to
 runs as admin can't be changed by other programs. It isn't signed, so Windows shows
 "Windows protected your PC" the first time; choose **More info**, then **Run anyway**.
 Each release has a `SHA256SUMS.txt` to check the download against
-(`Get-FileHash DiskTray-<version>-x64.msi`).
+(`Get-FileHash DiskTray-<version>-x64.msi`), and a build provenance attestation:
+`gh attestation verify DiskTray-<version>-x64.msi --repo <owner>/disktray` (this repo) checks
+it was built by this repo's GitHub Actions workflow. Installed silently (winget, a
+script), DiskTray doesn't start, or add itself to Startup apps, until you first start it.
 
 Uninstall it from **Settings › Apps**. That also removes your DiskTray settings, logs and
 caches (`%LOCALAPPDATA%\DiskTray`) and its Startup apps entry, once you've said yes to
@@ -55,8 +58,8 @@ uninstalled while a clean up is compacting a disk, or about to (yours or another
 signed-in user's): the installer says so, and you can try again once it's done. An
 upgrade that doesn't finish, for that reason or any other, starts DiskTray again.
 
-Clean up needs Docker Desktop 4.39 or later, using the WSL 2 backend, to prune and to
-stop and start Docker around a compact.
+Clean up prunes Docker through Docker Desktop's CLI, and needs Docker Desktop 4.39 or
+later, using the WSL 2 backend, to stop and start Docker around a compact.
 
 New tray icons start out in the taskbar's overflow (`^`). To keep them visible, turn
 them on under **Settings → Personalization → Taskbar → Other system tray icons**, or
@@ -69,15 +72,19 @@ drag them onto the taskbar.
 | `src/DiskTray.Core` | UI-free logic (`net10.0`) |
 | `src/DiskTray.App` | WPF tray app (`net10.0-windows`) |
 | `src/DiskTray.Compactor` | Elevated helper that compacts VHDX files |
+| `src/Shared` | Path checks the app and the Compactor share (linked into both) |
 | `tests/DiskTray.Core.Tests` | Unit tests for Core (run anywhere, including WSL) |
 | `tests/DiskTray.Windows.Tests` | Tests of the parts that run as admin, on real files and pipes (Windows only) |
+| `tests/DiskTray.TestHelper` | Small programs those tests run, such as a stand-in for DiskTray.exe |
 | `installer` | WiX project for the MSI |
 | `scripts/deploy.sh` | Publishes a development copy from WSL to Windows and restarts it |
-| `scripts/build-msi.sh` | Builds the MSI from WSL |
+| `scripts/uninstall.sh` | Removes that development copy |
+| `scripts/build-msi.sh` | Builds a dev MSI from WSL |
 
 ## Build
 
-Needs the .NET 10 SDK. Builds from Windows or WSL, but runs only on Windows. The
+Needs the exact .NET SDK that `global.json` names (`dotnet-install.sh --jsonfile
+global.json` installs it). Builds from Windows or WSL, but runs only on Windows. The
 development copy needs the .NET 10 Desktop Runtime; the installer brings its own.
 
 ```sh
@@ -86,11 +93,22 @@ dotnet test
 ```
 
 `dotnet test` runs the Windows tests too when run on Windows. A few of them need admin
-rights and are skipped without them; the GitHub Actions build runs them all, runs the
-Compactor tests again against the NativeAOT exe that ships, and on its runner installs
-the latest release, upgrades it to the new build (checking every file was replaced and
-that a running clean up stops it) and uninstalls it. The tests write DiskTray's log to a temp file, never
-to your own.
+rights and are skipped without them; the GitHub Actions build runs them all (failing
+any that would skip for want of rights), runs the Compactor tests again against the
+NativeAOT exe that ships, and on its runner installs the latest release, upgrades it to
+the new build (checking every file was replaced, DiskTray is started again, and that a
+running clean up stops it), uninstalls it, and installs it fresh. The tests write
+DiskTray's log to a temp file, never to your own.
+
+Each project's `packages.lock.json` records the exact version and hash of every NuGet
+package it uses, including the ones its packages bring in: the set the tests passed
+with. The GitHub Actions build restores exactly those and fails if a project no longer
+matches its lock file. A local restore updates the lock file after a package change;
+commit it with that change. The Compactor has none: its only packages (the NativeAOT
+compiler and trimmer) come with the .NET SDK, which `global.json` pins exactly, since
+it also decides the .NET runtime the installer brings. Dependabot opens a pull request
+each week for newer versions of the SDK, the NuGet packages and the workflow's actions,
+and the full build checks each one.
 
 ## Building the installer
 
@@ -104,15 +122,18 @@ for trying the installer out (it also needs a .NET 6 or later SDK on Windows, si
 only runs there). Its Compactor is a plain .NET build, which would take settings anything
 running as you can change into a process running as admin, so DiskTray won't run it:
 the dev MSI can't compact, nor do a dry run of compacting. Use a release to compact. A
-release installs over a dev MSI of the same version, but not the other way round:
-uninstall a release before trying a dev MSI.
+release installs over a dev MSI of the same version, replacing every file. A dev MSI
+installs over a release too, but then DiskTray can't compact until a release is
+installed again. Only the latest dev MSI is kept in `artifacts/msi`.
 
 ## Development copy
 
 `scripts/deploy.sh` publishes a development copy to `%LOCALAPPDATA%\Programs\DiskTray`
 and starts it, closing a running copy first. That copy can't compact disks: the
 Compactor only runs as admin from a folder that needs admin to change.
-`scripts/uninstall.sh` removes it.
+`scripts/uninstall.sh` removes it. The two copies share their settings and Startup apps
+entry, so with the installer's copy there too, `uninstall.sh` leaves the settings for it
+and points Start with Windows back at it.
 
 Errors are logged to `%LOCALAPPDATA%\DiskTray\logs\disktray.log`.
 

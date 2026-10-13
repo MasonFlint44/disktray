@@ -55,6 +55,21 @@ internal sealed partial class TestFolder : IDisposable
     private static partial uint GetLongPathName(string shortPath, [Out] char[] longPath, uint length);
 }
 
+/// <summary>tests/DiskTray.TestHelper, which the build puts beside the tests.</summary>
+internal static class TestHelper
+{
+    /// <summary>Copies the helper into <paramref name="folder"/>, its exe named <paramref name="name"/>. Returns the exe's path.</summary>
+    public static string CopyInto(string folder, string name)
+    {
+        foreach (var file in new DirectoryInfo(AppContext.BaseDirectory).EnumerateFiles("DiskTray.TestHelper.*"))
+        {
+            file.CopyTo(System.IO.Path.Combine(folder, file.Extension == ".exe" ? name : file.Name));
+        }
+
+        return System.IO.Path.Combine(folder, name);
+    }
+}
+
 internal static class Admin
 {
     /// <summary>Whether this test run has admin rights in effect.</summary>
@@ -80,6 +95,16 @@ internal static class Admin
         }
 
         Assert.SkipUnless(IsElevated, "Needs admin rights, as the Compactor has.");
+    }
+
+    /// <summary>
+    /// Skips a test that couldn't set up what it needs for want of rights, or fails it where
+    /// admin tests are required to run (DISKTRAY_REQUIRE_ADMIN_TESTS), since there it has them.
+    /// </summary>
+    public static void SkipForWantOfRights(string reason)
+    {
+        Assert.False(Environment.GetEnvironmentVariable("DISKTRAY_REQUIRE_ADMIN_TESTS") is { Length: > 0 }, $"{reason} (DISKTRAY_REQUIRE_ADMIN_TESTS is set)");
+        Assert.Skip(reason);
     }
 }
 
@@ -257,26 +282,53 @@ internal sealed unsafe partial class AttachedTestDisk : IDisposable
 
         var attach = new AttachParameters { Version = 1 };
         error = AttachVirtualDisk(_virtualDisk, 0, AttachNoDriveLetter, 0, ref attach, 0);
-        Assert.True(error == 0, $"AttachVirtualDisk failed ({error})");
+        if (error != 0)
+        {
+            _virtualDisk.Dispose();
+            Assert.Fail($"AttachVirtualDisk failed ({error})");
+        }
 
+        try
+        {
+            _device = OpenDevice(expectedBytes);
+        }
+        catch
+        {
+            // Attached for as long as its handle is open, so closing it detaches the disk at once.
+            _virtualDisk.Dispose();
+            throw;
+        }
+    }
+
+    private SafeFileHandle OpenDevice(long expectedBytes)
+    {
         var path = new char[260];
         uint size = (uint)(path.Length * sizeof(char));
-        error = GetVirtualDiskPhysicalPath(_virtualDisk, ref size, path);
+        uint error = GetVirtualDiskPhysicalPath(_virtualDisk, ref size, path);
         Assert.True(error == 0, $"GetVirtualDiskPhysicalPath failed ({error})");
         DevicePath = new string(path).TrimEnd('\0');
         Assert.StartsWith(@"\\.\PhysicalDrive", DevicePath);
 
-        _device = CreateFile(DevicePath, GenericReadWrite, ShareReadWrite, 0, OpenExisting, 0, 0);
-        Assert.False(_device.IsInvalid, $"Opening {DevicePath} failed ({Marshal.GetLastPInvokeError()})");
-        Assert.True(DeviceIoControl(_device, DiskGetLengthInfo, 0, 0, out long length, sizeof(long), out _, 0), $"Reading the disk's size failed ({Marshal.GetLastPInvokeError()})");
-        Assert.Equal(expectedBytes, length);
+        var device = CreateFile(DevicePath, GenericReadWrite, ShareReadWrite, 0, OpenExisting, 0, 0);
+        Assert.False(device.IsInvalid, $"Opening {DevicePath} failed ({Marshal.GetLastPInvokeError()})");
+        try
+        {
+            Assert.True(DeviceIoControl(device, DiskGetLengthInfo, 0, 0, out long length, sizeof(long), out _, 0), $"Reading the disk's size failed ({Marshal.GetLastPInvokeError()})");
+            Assert.Equal(expectedBytes, length);
+        }
+        catch
+        {
+            device.Dispose();
+            throw;
+        }
 
         // A disk attached on Windows Server can come up offline or read-only.
         var writable = new SetDiskAttributes { Version = (uint)Marshal.SizeOf<SetDiskAttributes>(), AttributesMask = 0x3 };
-        DeviceIoControl(_device, DiskSetAttributes, ref writable, (uint)Marshal.SizeOf<SetDiskAttributes>(), 0, 0, out _, 0);
+        DeviceIoControl(device, DiskSetAttributes, ref writable, (uint)Marshal.SizeOf<SetDiskAttributes>(), 0, 0, out _, 0);
+        return device;
     }
 
-    public string DevicePath { get; }
+    public string DevicePath { get; private set; } = "";
 
     /// <summary>Writes <paramref name="value"/> over the bytes from <paramref name="offset"/>, a MiB at a time.</summary>
     public void Fill(long offset, long count, byte value)
