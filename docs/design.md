@@ -448,8 +448,11 @@ General.
   then (it's closed first, so its files can be replaced), so it's started again just
   before the install stops, to follow the compact and say when it's done. The user's
   data and other users' copies are left alone: those steps only run once the install is
-  under way. A rebuilt MSI of the same version replaces the installed one rather than
-  installing beside it.
+  under way. An upgrade puts the new files in place before it removes the old version,
+  within the same install, so one that fails leaves the old version as it was. Files are
+  replaced by version, which every release raises. A rebuilt MSI of the same version
+  takes the installed one's place in Settings › Apps rather than installing beside it,
+  but leaves files of the same version as they were.
 
   Releases come from the GitHub Actions workflow, since NativeAOT for Windows needs
   Windows and the C++ build tools. It runs the tests (Core on Linux; everything,
@@ -458,8 +461,8 @@ General.
   `Version` in `Directory.Build.props` it publishes a release with both attached. The
   WiX build refuses a Compactor that isn't the native one. Before building the MSI, the
   Compactor exe tests run again against the native exe that ships; then the runner
-  installs the MSI, checks the installed Compactor passes the app's checks as an
-  everyday token, upgrades it with a second build and uninstalls it. Its actions are
+  installs the latest release's MSI, upgrades it to this build, checks the installed
+  Compactor passes the app's checks as an everyday token, and uninstalls it. Its actions are
   pinned to commits, not tags. `scripts/build-msi.sh` builds a `-dev` MSI from WSL for
   trying the installer, with a plain .NET Compactor that the app won't run (see
   "Native, not .NET"), so it can't compact (WiX only runs on Windows, so it uses the

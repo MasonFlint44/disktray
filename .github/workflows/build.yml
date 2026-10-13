@@ -65,17 +65,19 @@ jobs:
           DISKTRAY_COMPACTOR_EXE: ${{ github.workspace }}\artifacts\publish\DiskTray.Compactor.exe
         run: dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --filter-trait "Compactor=exe"
       - name: Build the MSI
-        # Twice: each build gets its own product code, so installing the first and then the
-        # second is a real upgrade. The second is the one released.
+        run: dotnet build installer -c Release
+      - name: Download the latest release's MSI
+        # What people have installed, for the upgrade below. On a tag, it's the release
+        # before this one, which is only published after this job.
         shell: pwsh
-        run: |
-          dotnet build installer -c Release
-          Copy-Item (Get-ChildItem artifacts/msi/*.msi).FullName "$env:RUNNER_TEMP\earlier.msi"
-          dotnet build installer -c Release --no-incremental
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --repo $env:GITHUB_REPOSITORY --pattern '*.msi' --output "$env:RUNNER_TEMP\earlier.msi"
       - name: Install, upgrade and uninstall the MSI
-        # On this throwaway runner only. Checks the files land in Program Files, that the
-        # installed Compactor passes DiskTray's own checks before it runs as admin, that an
-        # upgrade replaces it, and that uninstalling takes it all away.
+        # On this throwaway runner only. Checks the latest release installs to Program
+        # Files, that this build upgrades it, that the installed Compactor passes
+        # DiskTray's own checks before it runs as admin, and that uninstalling takes it all
+        # away.
         shell: pwsh
         env:
           DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
@@ -95,11 +97,11 @@ jobs:
           $msi = (Get-ChildItem artifacts/msi/*.msi).FullName
           Msi /i "$env:RUNNER_TEMP\earlier.msi" install.log
           if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The Compactor isn't in $folder" }
-          dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed"
-          if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
           Msi /i $msi upgrade.log
           if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The upgrade left no Compactor in $folder" }
           if ((Installed) -ne 1) { throw "After the upgrade, Settings › Apps lists DiskTray $(Installed) times" }
+          dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed"
+          if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
           # An upgrade starts DiskTray again for whoever ran it.
           Start-Sleep -Seconds 5
           Msi /x $msi uninstall.log

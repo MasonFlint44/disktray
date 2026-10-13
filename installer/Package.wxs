@@ -4,9 +4,13 @@
            UpgradeCode="e048c4d3-96be-41df-9c0a-9ae7059d2735">
     <!-- Same-version upgrades too, so a rebuilt MSI replaces the installed one rather than
          installing beside it. -->
-    <!-- The old version comes out inside this install's own script, after other users'
-         copies have been closed (CloseOtherSessions), so its files aren't in use. -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallInitialize"
+    <!-- The old version comes out inside this install's own script, so a failed upgrade
+         puts it back, and only once the new files are in place. Removing it any earlier,
+         straight after InstallInitialize, means nothing may be queued before it, and closing
+         other users' copies (CloseOtherSessions) queues its work there, so every upgrade
+         failed (error 2613). New files replace old ones by version, and every release
+         raises it. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" Schedule="afterInstallExecute"
                   DowngradeErrorMessage="A newer version of DiskTray is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
@@ -84,19 +88,18 @@
     <InstallExecuteSequence>
       <Custom Action="CloseDiskTray" Before="InstallValidate"
               Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot;" />
-      <!-- Between InstallInitialize and RemoveExistingProducts, before the old version or
-           any file is removed. Each is placed before the next, since RemoveExistingProducts
-           sits straight after InstallInitialize. RemoveUserData (on an uninstall) and the
-           closing of other sessions' copies are deferred: they're queued here and only run
-           once the install is under way, so after the check for a running Compactor, which
-           stops the install before either has run. -->
-      <Custom Action="RemoveUserData" Before="Wix4CloseApplications_X64"
+      <!-- Straight after InstallInitialize, in this order, before any file is changed.
+           RemoveUserData (on an uninstall) and the closing of other sessions' copies are
+           deferred: they're queued here and only run once the install is under way, so
+           after the check for a running Compactor, which stops the install before either
+           has run. -->
+      <Custom Action="RemoveUserData" After="InstallInitialize"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
-      <Custom Action="override Wix4CloseApplications_X64" Before="StartDiskTrayAgain" />
+      <Custom Action="override Wix4CloseApplications_X64" After="RemoveUserData" />
       <!-- Only where CloseDiskTray closed it, and not for an install run as SYSTEM. -->
-      <Custom Action="StartDiskTrayAgain" Before="StopWhileCompacting"
+      <Custom Action="StartDiskTrayAgain" After="Wix4CloseApplications_X64"
               Condition="COMPACTORRUNNING AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot; AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
-      <Custom Action="StopWhileCompacting" Before="RemoveExistingProducts" Condition="COMPACTORRUNNING" />
+      <Custom Action="StopWhileCompacting" After="StartDiskTrayAgain" Condition="COMPACTORRUNNING" />
       <Custom Action="CloseAnyCopy" After="InstallFinalize"
               Condition="NOT REMOVE~=&quot;ALL&quot;" />
       <Custom Action="StartDiskTray" After="CloseAnyCopy"
