@@ -7,7 +7,7 @@
     <!-- Lets the Windows-only projects build from WSL/Linux. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <!-- Shown in Settings › Apps. -->
-    <Version>0.1.3</Version>
+    <Version>0.1.4</Version>
     <!-- The exes' file version gets a fourth number that only grows: the GitHub Actions run
          number there, 0 for a local build. An upgrade replaces a file only when its version
          is higher, so this way a release replaces a local build of the same version, and each
