@@ -109,6 +109,32 @@ public class UsageCacheTests
     }
 
     [Fact]
+    public void Says_its_changed_only_when_theres_something_new_to_save()
+    {
+        var cache = UsageCache.FromJson(null);
+        Assert.False(cache.Changed);
+
+        cache.Set(@"C:.vhdx", Reading);
+        Assert.True(cache.Changed);
+        cache.MarkSaved();
+
+        // The same reading again, and sightings within the day, as a refresh with WSL stopped gives.
+        cache.Set(@"C:.vhdx", Reading);
+        cache.RetainOnly([@"C:.vhdx"], Reading.MeasuredAt.AddHours(1));
+        cache.MarkSaved();
+        cache.RetainOnly([@"C:.vhdx"], Reading.MeasuredAt.AddHours(20));
+        Assert.False(cache.Changed);
+
+        cache.RetainOnly([@"C:.vhdx"], Reading.MeasuredAt.AddDays(2));
+        Assert.True(cache.Changed);
+        cache.MarkSaved();
+
+        cache.RetainOnly([], Reading.MeasuredAt.AddDays(40));
+        Assert.True(cache.Changed);
+        Assert.False(UsageCache.FromJson(cache.ToJson()).Changed);
+    }
+
+    [Fact]
     public void Counts_the_month_from_when_a_file_was_last_seen_not_measured()
     {
         // Measured once, then detected but never running for 29 days, then hidden.

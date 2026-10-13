@@ -13,8 +13,16 @@ internal static unsafe partial class VirtualDisk
 {
     private const uint VhdxDevice = 3;
     private const uint AccessMetaOps = 0x0020_0000;
+
+    /// <summary>
+    /// OPEN_VIRTUAL_DISK_FLAG_NO_PARENTS. WSL and Docker disks have no parents, and a
+    /// differencing disk's parent paths are written inside the file, which the user can change,
+    /// so they're never opened from here.
+    /// </summary>
+    private const uint OpenNoParents = 0x1;
     private const uint ErrorSuccess = 0;
     private const uint ErrorIoPending = 997;
+    private static readonly TimeSpan CancelTimeout = TimeSpan.FromMinutes(1);
     private static readonly Guid MicrosoftVendor = new("EC984AEC-A0F9-47e9-901F-71415A66345B");
 
     /// <summary>Compacts the disk, reporting the percentage done. Returns why it failed, or null.</summary>
@@ -22,7 +30,7 @@ internal static unsafe partial class VirtualDisk
     {
         var type = new StorageType { DeviceId = VhdxDevice, VendorId = MicrosoftVendor };
         var open = new OpenParameters { Version = 1, RWDepth = 1 };
-        uint error = OpenVirtualDisk(ref type, path, AccessMetaOps, 0, ref open, out var handle);
+        uint error = OpenVirtualDisk(ref type, path, AccessMetaOps, OpenNoParents, ref open, out var handle);
         if (error != ErrorSuccess)
         {
             return Describe("open", error);
@@ -33,6 +41,7 @@ internal static unsafe partial class VirtualDisk
         {
             // Lives in unmanaged memory, since Windows writes to it until the compact ends.
             var overlapped = (NativeOverlapped*)NativeMemory.AllocZeroed((nuint)sizeof(NativeOverlapped));
+            bool windowsHasIt = false;
             try
             {
                 overlapped->EventHandle = done.SafeWaitHandle.DangerousGetHandle();
@@ -56,8 +65,15 @@ internal static unsafe partial class VirtualDisk
                     error = GetVirtualDiskOperationProgress(handle, overlapped, out var state);
                     if (error != ErrorSuccess)
                     {
-                        // Can't ask any more; wait for the end, since Windows still owns the OVERLAPPED.
-                        done.WaitOne();
+                        // Can't follow it any more, so it's cancelled (which leaves the disk as
+                        // it was) rather than waited on blind. Windows owns the OVERLAPPED until
+                        // the compact ends; if that doesn't come, it's left to the process's end.
+                        if (!done.WaitOne(0))
+                        {
+                            CancelIoEx(handle, overlapped);
+                            windowsHasIt = !done.WaitOne(CancelTimeout);
+                        }
+
                         return Describe("check on", error);
                     }
 
@@ -77,7 +93,15 @@ internal static unsafe partial class VirtualDisk
             }
             finally
             {
-                NativeMemory.Free(overlapped);
+                if (windowsHasIt)
+                {
+                    // Nor is its event closed, so Windows can't set a handle that's been reused.
+                    done.SafeWaitHandle.SetHandleAsInvalid();
+                }
+                else
+                {
+                    NativeMemory.Free(overlapped);
+                }
             }
         }
     }
@@ -131,6 +155,10 @@ internal static unsafe partial class VirtualDisk
         uint flags,
         ref CompactParameters parameters,
         NativeOverlapped* overlapped);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool CancelIoEx(SafeFileHandle handle, NativeOverlapped* overlapped);
 
     [LibraryImport("virtdisk.dll")]
     private static partial uint GetVirtualDiskOperationProgress(

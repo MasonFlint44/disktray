@@ -21,10 +21,28 @@ public sealed class UsageCache
 
     public UsageReading? Get(string path) => _readings.GetValueOrDefault(path);
 
-    public void Set(string path, UsageReading reading) => _readings[path] = reading;
+    /// <summary>Whether anything has changed since it was loaded or <see cref="MarkSaved"/>, so it's worth writing out.</summary>
+    public bool Changed { get; private set; }
+
+    public void MarkSaved() => Changed = false;
+
+    public void Set(string path, UsageReading reading)
+    {
+        if (_readings.GetValueOrDefault(path) != reading)
+        {
+            _readings[path] = reading;
+            Changed = true;
+        }
+    }
 
     /// <summary>How long a reading for a disk file that's no longer seen is kept, in case it comes back.</summary>
     public static readonly TimeSpan ForgetAfter = TimeSpan.FromDays(30);
+
+    /// <summary>
+    /// Sightings are only moved on this often, which is plenty against <see cref="ForgetAfter"/>,
+    /// so a refresh that measures nothing new doesn't rewrite the file.
+    /// </summary>
+    private static readonly TimeSpan SeenPrecision = TimeSpan.FromDays(1);
 
     /// <summary>
     /// Forgets disk files that haven't been seen for <see cref="ForgetAfter"/>. Not at once,
@@ -37,7 +55,11 @@ public sealed class UsageCache
         var keep = paths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (string path in keep.Where(_readings.ContainsKey))
         {
-            _seen[path] = now;
+            if (!_seen.TryGetValue(path, out var seen) || now - seen >= SeenPrecision || now < seen)
+            {
+                _seen[path] = now;
+                Changed = true;
+            }
         }
 
         // A file saved before sightings were kept counts as seen when it was measured.
@@ -45,6 +67,7 @@ public sealed class UsageCache
         {
             _readings.Remove(path);
             _seen.Remove(path);
+            Changed = true;
         }
     }
 
@@ -87,6 +110,7 @@ public sealed class UsageCache
         {
         }
 
+        cache.MarkSaved();
         return cache;
     }
 

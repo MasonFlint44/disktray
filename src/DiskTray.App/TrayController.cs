@@ -78,15 +78,18 @@ internal sealed class TrayController : IDisposable
 
     public async Task StartAsync()
     {
+        // The run record first, so a clean up left halfway keeps the first refresh away from WSL too.
+        var finishing = FinishInterruptedCleanupAsync();
         await RefreshAsync();
         _timer.Start();
         _reminderTimer.Start();
-        await FinishInterruptedCleanupAsync();
+        await finishing;
     }
 
     /// <summary>
-    /// Finishes a clean up the last run of DiskTray exited during, if there was one. Shown
-    /// like a running clean up meanwhile, so another can't start before its Compactor ends.
+    /// Finishes a clean up that was left halfway (DiskTray exited during it, or its Compactor
+    /// stopped answering), if the run record says there is one. Shown like a running clean up
+    /// meanwhile, so another can't start before its Compactor ends.
     /// </summary>
     private async Task FinishInterruptedCleanupAsync()
     {
@@ -96,16 +99,18 @@ internal sealed class TrayController : IDisposable
             return;
         }
 
-        _cleanupProgress = new CleanupProgress(CleanupStep.FinishingEarlierRun, "Finishing the clean up that was running when DiskTray closed");
+        _cleanupProgress = new CleanupProgress(CleanupStep.FinishingEarlierRun, marker.StoppedAnswering
+            ? "Waiting for the Compactor to end"
+            : "Finishing the clean up that was running when DiskTray closed");
         UpdateCleanupStatus();
         try
         {
             var finish = new InterruptedCleanup(_docker, _wsl, CleanupMarkerFile.CompactorRunning, delay => Task.Delay(delay), Log.Info);
-            string? finished = await finish.FinishAsync(marker);
+            var notice = await finish.FinishAsync(marker);
             CleanupMarkerFile.Clear();
-            if (finished is not null)
+            if (notice is not null)
             {
-                Notifier.ShowCleanup("Clean up didn't finish", finished);
+                Notifier.ShowCleanup(notice.Title, notice.Body);
             }
         }
         catch (Exception e)
@@ -402,12 +407,15 @@ internal sealed class TrayController : IDisposable
 
         Log.Info($"Clean up started{(request.DryRun ? " (dry run)" : "")}: build cache {request.BuildCache}, dangling images {request.DanglingImages}, " +
             $"{request.Volumes.Count} volumes, compact {request.Disks.Count} disks {request.When}, start Docker after {request.StartDockerAfter}");
+        CleanupMarker? saved = null;
+        CleanupMarker? keep = null;
         try
         {
             // From stopping Docker on, exiting would leave it stopped, so the next start finishes up.
             var run = new CleanupRun(_docker, _wsl, launcher, (delay, cancel) => Task.Delay(delay, cancel), Log.Info, point =>
-                CleanupMarkerFile.Save(new CleanupMarker(request.StartDockerAfter, DateTimeOffset.Now, point == CleanupMilestone.Compacting)));
+                CleanupMarkerFile.Save(saved = new CleanupMarker(request.StartDockerAfter, DateTimeOffset.Now, point == CleanupMilestone.Compacting)));
             var result = await run.RunAsync(request, progress, _cleanupCancel.Token);
+            keep = result.RecordAfter(saved);
             Log.Info($"{result.Title}: {result.Body().Replace('\n', ' ')}");
             Notifier.ShowCleanup(result.Title, result.Body());
         }
@@ -420,7 +428,15 @@ internal sealed class TrayController : IDisposable
         {
             progress.Done();
             window.CloseIfOpen();
-            CleanupMarkerFile.Clear();
+            if (keep is null)
+            {
+                CleanupMarkerFile.Clear();
+            }
+            else
+            {
+                CleanupMarkerFile.Save(keep);
+            }
+
             _cleanupProgress = null;
             _cleanupCancel.Dispose();
             _cleanupCancel = null;
@@ -428,6 +444,11 @@ internal sealed class TrayController : IDisposable
         }
 
         await RefreshAsync();
+        if (keep is not null)
+        {
+            // Its Compactor may still be compacting: wait for it, as after a restart.
+            await FinishInterruptedCleanupAsync();
+        }
     }
 
     private void UpdateCleanupStatus()
@@ -570,6 +591,19 @@ internal sealed class TrayController : IDisposable
             }
         };
         return new ContextMenu { Items = { refresh, cleanup, settings, new Separator(), exit } };
+    }
+
+    /// <summary>
+    /// Called when another copy (the installer, a script) asks this one to exit, which it
+    /// does without asking. Says so when that drops a clean up the next start won't finish.
+    /// </summary>
+    public void ClosingFromOutside()
+    {
+        if (_cleanupProgress?.ClosedNotice is { } notice)
+        {
+            Log.Info($"Closed from outside during a clean up ({_cleanupProgress.Step})");
+            Notifier.ShowCleanup("Clean up didn't finish", notice);
+        }
     }
 
     /// <summary>

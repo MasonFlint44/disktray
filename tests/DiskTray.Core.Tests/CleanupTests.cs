@@ -340,6 +340,22 @@ public class VolumeConfidenceTests
     }
 
     [Fact]
+    public void Checks_a_project_in_a_windows_folder_the_same_way()
+    {
+        var cache = new ProjectFolderCache();
+        cache.Record(new Dictionary<string, ProjectFolder> { ["acmeweb-app_devcontainer"] = new(null, @"C:\code\acme.web-app") }, DateTimeOffset.UnixEpoch);
+        var withFolder = Folders();
+        withFolder.Existing.Add(@"C:\code\acme.web-app");
+
+        var gone = Group(Folders(), cache).Single(g => g.Project == "acmeweb-app_devcontainer");
+        var there = Group(withFolder, cache).Single(g => g.Project == "acmeweb-app_devcontainer");
+
+        Assert.Equal((FolderCheck.Deleted, true), (gone.Check, gone.PreSelected));
+        Assert.Equal((FolderCheck.Exists, false), (there.Check, there.PreSelected));
+        Assert.Equal(new ProjectFolder(null, @"C:\code\acme.web-app"), there.Folder);
+    }
+
+    [Fact]
     public void Doesnt_count_a_folder_as_deleted_when_its_distro_isnt_running()
     {
         var folders = Folders();
@@ -607,6 +623,19 @@ public class CleanupLayoutTests
         Assert.Equal(expected, CleanupChoices.StartDockerDefault(State(dockerRunning), new CleanupDefaults(StartDockerAfter: setting), when));
 
     [Fact]
+    public void Has_the_wait_for_idle_watch_docker_desktops_own_disk_too()
+    {
+        var state = State();
+
+        var request = CleanupRequest.From(state, CleanupChoices.Defaults(state), Build(state), dryRun: false);
+
+        Assert.Equivalent(
+            new[] { Machine.DockerData, Machine.UbuntuBase + @"\ext4.vhdx", @"C:\Users\me\wsl-vpnkit\ext4.vhdx", @"C:\Users\me\AppData\Local\Docker\wsl\main\ext4.vhdx" },
+            request.WslDisks,
+            strict: true);
+    }
+
+    [Fact]
     public void Starts_with_what_settings_say()
     {
         var choices = CleanupChoices.Defaults(
@@ -843,6 +872,51 @@ public sealed class FolderLookupTests : IDisposable
 
         Assert.Null(Lookup().Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
         Assert.Null(Lookup().FolderNames(new ProjectFolder("Ubuntu", "/home/me")));
+    }
+
+    [Fact]
+    public void Gives_up_on_a_look_that_hangs_and_on_that_distro_after_it()
+    {
+        using var stuck = new ManualResetEventSlim();
+        int looks = 0;
+        var lookup = new FolderLookup(
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Ubuntu", "Debian" },
+            (distro, path) => distro + ":" + path,
+            path =>
+            {
+                Interlocked.Increment(ref looks);
+                if (path.StartsWith("Ubuntu:", StringComparison.Ordinal))
+                {
+                    stuck.Wait(TestContext.Current.CancellationToken);
+                }
+
+                return true;
+            },
+            _ => [],
+            TimeSpan.FromMilliseconds(100));
+        try
+        {
+            Assert.Null(lookup.Exists(new ProjectFolder("Ubuntu", "/home/me/app")));
+            // Ubuntu isn't asked again, but other distros still are.
+            Assert.Null(lookup.Exists(new ProjectFolder("Ubuntu", "/home/me/other")));
+            Assert.Null(lookup.FolderNames(new ProjectFolder("Ubuntu", "/home/me")));
+            Assert.True(lookup.Exists(new ProjectFolder("Debian", "/home/me/app")));
+            Assert.Equal(2, looks);
+        }
+        finally
+        {
+            stuck.Set();
+        }
+    }
+
+    [Fact]
+    public void Looks_at_a_windows_folder_directly()
+    {
+        string app = Directory.CreateDirectory(Path.Combine(_root, "code", "app")).FullName;
+
+        Assert.True(Lookup().Exists(new ProjectFolder(null, app)));
+        Assert.False(Lookup().Exists(new ProjectFolder(null, Path.Combine(_root, "code", "gone"))));
+        Assert.Equal(["app"], Lookup().FolderNames(new ProjectFolder(null, Path.Combine(_root, "code"))));
     }
 
     [Fact]

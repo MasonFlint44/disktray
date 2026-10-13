@@ -112,7 +112,10 @@ public sealed record AppSettings
 
     public CompactWhen CleanupCompactWhen { get; init; } = CompactWhen.WhenIdle;
 
-    /// <summary>Clean up starts Docker Desktop after compacting, when it was running to begin with.</summary>
+    /// <summary>
+    /// "Start Docker Desktop afterwards" starts ticked, but only when compacting right away
+    /// and Docker Desktop is running (<see cref="CleanupChoices.StartDockerDefault"/>).
+    /// </summary>
     public bool CleanupStartDocker { get; init; } = true;
 
     [JsonIgnore]

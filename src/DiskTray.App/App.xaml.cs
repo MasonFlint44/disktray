@@ -58,7 +58,11 @@ public partial class App : Application
                 // Lets scripts and the installer close the running copy cleanly, so its icons
                 // leave the tray instead of lingering until hovered, and its files can be
                 // replaced once this returns.
-                CloseRunningCopy(wait: true);
+                if (CloseRunningCopy(wait: true))
+                {
+                    WaitForCompactorToEnd();
+                }
+
                 Shutdown();
                 return;
             case ["--remove-user-data"]:
@@ -79,7 +83,16 @@ public partial class App : Application
 
         _exitSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ExitEventName);
         _exitWait = ThreadPool.RegisterWaitForSingleObject(
-            _exitSignal, (_, _) => Dispatcher.BeginInvoke(() => Shutdown()), null, Timeout.Infinite, executeOnlyOnce: true);
+            _exitSignal,
+            (_, _) => Dispatcher.BeginInvoke(() =>
+            {
+                // Asked by another copy (the installer, a script): there's no one to ask first.
+                _tray?.ClosingFromOutside();
+                Shutdown();
+            }),
+            null,
+            Timeout.Infinite,
+            executeOnlyOnce: true);
 
         Log.Info($"Started {Environment.ProcessPath}{(dryRun ? " for clean up dry runs" : "")}");
         Uninstaller.RemoveOldEntry();
@@ -134,6 +147,19 @@ public partial class App : Application
 
         instance.ReleaseMutex();
         return true;
+    }
+
+    /// <summary>
+    /// A Compactor still waiting for "go" ends within a second or two of DiskTray closing.
+    /// Waited for briefly, so the installer, which stops for a Compactor that's running,
+    /// doesn't take that one for a compact. One that's compacting carries on, and is found.
+    /// </summary>
+    private static void WaitForCompactorToEnd()
+    {
+        for (var waited = TimeSpan.Zero; CleanupMarkerFile.CompactorRunning() && waited < TimeSpan.FromSeconds(5); waited += TimeSpan.FromMilliseconds(250))
+        {
+            Thread.Sleep(250);
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)

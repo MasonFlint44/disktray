@@ -49,10 +49,15 @@
                            TerminateProcess="1" Timeout="15" RebootPrompt="no" Condition="Installed OR WIX_UPGRADE_DETECTED" />
 
     <!-- A Compactor running means a disk is being compacted. Ending it part way, or
-         replacing it, would leave that disk half done, so the install stops instead. -->
+         replacing it, would leave that disk half done, so the install stops instead. By
+         then an upgrade has closed DiskTray (CloseDiskTray comes first, so its files can be
+         replaced), so it's started again just before, to follow the compact and say when
+         it's done. -->
     <util:CloseApplication Id="CompactorRunning" Target="DiskTray.Compactor.exe" Property="COMPACTORRUNNING" RebootPrompt="no" />
     <CustomAction Id="StopWhileCompacting"
-                  Error="DiskTray is compacting a disk right now. Wait until it's done (the DiskTray flyout shows how it's going), then try again." />
+                  Error="DiskTray is compacting a disk right now, so it can't be upgraded or removed. Wait until DiskTray says it's done, then try again." />
+    <CustomAction Id="StartDiskTrayAgain" Directory="INSTALLFOLDER" Execute="immediate" Return="asyncNoWait"
+                  ExeCommand="&quot;[WindowsFolder]explorer.exe&quot; &quot;[INSTALLFOLDER]DiskTray.exe&quot;" />
 
     <!-- These run as the user doing the install, without admin rights, in their session. -->
 
@@ -79,15 +84,18 @@
     <InstallExecuteSequence>
       <Custom Action="CloseDiskTray" Before="InstallValidate"
               Condition="(Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot;" />
-      <!-- Between InstallInitialize and RemoveExistingProducts, as early as admin actions can
-           be queued, before the old version or any file is removed, in this order: the
-           user's own copy closes cleanly and their data goes (on an uninstall), then other
-           sessions' copies are closed and a running Compactor is looked for, which stops
-           the install. Each is placed before the next, since RemoveExistingProducts sits
-           straight after InstallInitialize. -->
+      <!-- Between InstallInitialize and RemoveExistingProducts, before the old version or
+           any file is removed. Each is placed before the next, since RemoveExistingProducts
+           sits straight after InstallInitialize. RemoveUserData (on an uninstall) and the
+           closing of other sessions' copies are deferred: they're queued here and only run
+           once the install is under way, so after the check for a running Compactor, which
+           stops the install before either has run. -->
       <Custom Action="RemoveUserData" Before="Wix4CloseApplications_X64"
               Condition="REMOVE~=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
-      <Custom Action="override Wix4CloseApplications_X64" Before="StopWhileCompacting" />
+      <Custom Action="override Wix4CloseApplications_X64" Before="StartDiskTrayAgain" />
+      <!-- Only where CloseDiskTray closed it, and not for an install run as SYSTEM. -->
+      <Custom Action="StartDiskTrayAgain" Before="StopWhileCompacting"
+              Condition="COMPACTORRUNNING AND (Installed OR WIX_UPGRADE_DETECTED) AND NOT REMOVE~=&quot;ALL&quot; AND UserSID &lt;&gt; &quot;S-1-5-18&quot;" />
       <Custom Action="StopWhileCompacting" Before="RemoveExistingProducts" Condition="COMPACTORRUNNING" />
       <Custom Action="CloseAnyCopy" After="InstallFinalize"
               Condition="NOT REMOVE~=&quot;ALL&quot;" />

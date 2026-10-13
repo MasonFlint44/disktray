@@ -10,13 +10,16 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to a commit, not a tag that could be moved: the installer job builds
+# the Compactor that DiskTray runs as admin.
+
 jobs:
   test:
     # The tests cover DiskTray.Core, which is plain .NET, so they run where development does.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - run: dotnet test
@@ -29,8 +32,8 @@ jobs:
     env:
       DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - run: dotnet test
@@ -38,8 +41,8 @@ jobs:
   installer:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           global-json-file: global.json
       - name: Check the tag matches the version
@@ -54,8 +57,50 @@ jobs:
         run: |
           dotnet publish src/DiskTray.App -c Release -r win-x64 --self-contained -o artifacts/publish
           dotnet publish src/DiskTray.Compactor -c Release -r win-x64 -o artifacts/publish
+      - name: Test the native Compactor
+        # The Windows tests run the .NET build; these run the NativeAOT exe that ships, so a
+        # problem only it has (trimming, generated JSON, loading Windows' DLLs) shows here.
+        env:
+          DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
+          DISKTRAY_COMPACTOR_EXE: ${{ github.workspace }}\artifacts\publish\DiskTray.Compactor.exe
+        run: dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --filter-trait "Compactor=exe"
       - name: Build the MSI
-        run: dotnet build installer -c Release
+        # Twice: each build gets its own product code, so installing the first and then the
+        # second is a real upgrade. The second is the one released.
+        shell: pwsh
+        run: |
+          dotnet build installer -c Release
+          Copy-Item (Get-ChildItem artifacts/msi/*.msi).FullName "$env:RUNNER_TEMP\earlier.msi"
+          dotnet build installer -c Release --no-incremental
+      - name: Install, upgrade and uninstall the MSI
+        # On this throwaway runner only. Checks the files land in Program Files, that the
+        # installed Compactor passes DiskTray's own checks before it runs as admin, that an
+        # upgrade replaces it, and that uninstalling takes it all away.
+        shell: pwsh
+        env:
+          DISKTRAY_REQUIRE_ADMIN_TESTS: '1'
+        run: |
+          function Msi([string] $action, [string] $msi, [string] $log) {
+            $p = Start-Process msiexec.exe -ArgumentList "$action `"$msi`" /qn /l*v `"$env:RUNNER_TEMP\$log`"" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { Get-Content "$env:RUNNER_TEMP\$log" -Tail 60; throw "msiexec $action $msi exited with $($p.ExitCode)" }
+          }
+          function Installed { @(Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'DiskTray').Count }
+          $folder = "$env:ProgramFiles\DiskTray"
+          $env:DISKTRAY_INSTALLED_COMPACTOR = "$folder\DiskTray.Compactor.exe"
+          $msi = (Get-ChildItem artifacts/msi/*.msi).FullName
+          Msi /i "$env:RUNNER_TEMP\earlier.msi" install.log
+          if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The Compactor isn't in $folder" }
+          dotnet test --project tests/DiskTray.Windows.Tests/DiskTray.Windows.Tests.csproj --no-build --filter-trait "Compactor=installed"
+          if ($LASTEXITCODE -ne 0) { throw "The installed Compactor didn't pass" }
+          Msi /i $msi upgrade.log
+          if (-not (Test-Path "$folder\DiskTray.Compactor.exe")) { throw "The upgrade left no Compactor in $folder" }
+          if ((Installed) -ne 1) { throw "After the upgrade, Settings › Apps lists DiskTray $(Installed) times" }
+          # An upgrade starts DiskTray again for whoever ran it.
+          Start-Sleep -Seconds 5
+          Msi /x $msi uninstall.log
+          if (Test-Path $folder) { throw "$folder is still there after uninstalling" }
+          if ((Installed) -ne 0) { throw "DiskTray is still listed in Settings › Apps after uninstalling" }
+          if (Get-Process DiskTray -ErrorAction SilentlyContinue) { throw "DiskTray is still running after uninstalling" }
       - name: Checksum
         shell: pwsh
         working-directory: artifacts/msi
@@ -63,7 +108,7 @@ jobs:
           Get-ChildItem *.msi | ForEach-Object { "$((Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } |
             Set-Content -Encoding ascii SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msi
           path: |
@@ -79,7 +124,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: msi
       - run: gh release create "$GITHUB_REF_NAME" *.msi SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --title "DiskTray ${GITHUB_REF_NAME#v}" --generate-notes

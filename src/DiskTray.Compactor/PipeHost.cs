@@ -37,8 +37,11 @@ internal sealed class PipeHost : ICompactorHost, IDisposable
                 {
                     line = reader.ReadLine();
                 }
-                catch (IOException)
+                catch (Exception)
                 {
+                    // However the pipe ended (closing it under a waiting read can show up as
+                    // a cancelled or disposed stream, not only an IOException), the app is gone
+                    // as far as this can tell, and a throw here would end the process.
                     line = null;
                 }
 
@@ -78,6 +81,18 @@ internal sealed class PipeHost : ICompactorHost, IDisposable
 
     public AppSignal Poll() => (AppSignal)_signal;
 
+    public string? Check(string path)
+    {
+        // Nothing about the disk is looked at for an account that can't be told.
+        if (_user is null)
+        {
+            return Refusal(null);
+        }
+
+        using var look = PathHold.Look(path, out string? problem);
+        return look is null ? problem : Refusal(_user.CanWrite(look.File));
+    }
+
     public long? FileSize(string path)
     {
         try
@@ -96,21 +111,23 @@ internal sealed class PipeHost : ICompactorHost, IDisposable
 
     public string? CompactDisk(string path, Action<int> progress)
     {
-        string name = Path.GetFileName(path);
         using var hold = PathHold.Take(path, out string? problem);
         if (hold is null)
         {
-            return $"Didn't compact {name}: {problem}.";
+            return problem;
         }
 
-        // Checked while held, so it's the file that gets compacted.
-        return _user?.CanWrite(path) switch
-        {
-            true => VirtualDisk.Compact(path, progress),
-            false => $"Didn't compact {name}: the account that asked can't change it, so it isn't DiskTray's to compact.",
-            null => $"Didn't compact {name}: the Compactor {_userProblem ?? "couldn't check that the account that asked can change it"}.",
-        };
+        // Checked again while held, on the held file, so it's the file that gets compacted.
+        return Refusal(_user?.CanWrite(hold.File)) ?? VirtualDisk.Compact(path, progress);
     }
+
+    /// <summary>Why a disk isn't compacted, from what the account check said, or null when it can be.</summary>
+    private string? Refusal(bool? canWrite) => canWrite switch
+    {
+        true => null,
+        false => "the account that asked can't change it, so it isn't DiskTray's to compact",
+        null => $"the Compactor {_userProblem ?? "couldn't check that the account that asked can change it"}",
+    };
 
     public void Report(CompactStatus status) => Send(CompactorMessages.Status(status));
 

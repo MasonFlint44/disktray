@@ -51,6 +51,15 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
             return $"{bad} isn't a disk file DiskTray can compact";
         }
 
+        // A .NET build of the Compactor (a development one) would take settings the user can
+        // change, such as a profiler to load, into a process running as admin. The released
+        // one is native, a single exe with no .dll of its own.
+        if (NotNative(ExePath) is { } notNative)
+        {
+            Log.Info($"Can't compact: {notNative}");
+            return notNative;
+        }
+
         // Before the admin prompt, so a Compactor something else could have swapped never gets it.
         if (ProtectedFolder.Problem(ExePath) is { } unprotected)
         {
@@ -59,7 +68,17 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         }
 
         var args = new CompactorArgs(CompactorArgs.NewPipeName(), disks, dryRun);
-        OpenPipe(args.Pipe);
+        try
+        {
+            OpenPipe(args.Pipe);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Log.Error("Couldn't open the pipe to the Compactor", e);
+            Close();
+            return "DiskTray couldn't open its pipe to the Compactor";
+        }
+
         var start = new ProcessStartInfo(ExePath)
         {
             UseShellExecute = true,
@@ -98,9 +117,18 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         }
 
         Log.Info($"Started the Compactor ({_process.Id}){(dryRun ? " for a dry run" : "")}: {string.Join(", ", disks)}");
-        Listen(_process.Id);
+        Listen(_process);
         return null;
     }
+
+    /// <summary>
+    /// Why the Compactor at <paramref name="exe"/> isn't the native build, or null when it is:
+    /// a .NET build has its code in a .dll of the same name beside it.
+    /// </summary>
+    internal static string? NotNative(string exe) =>
+        File.Exists(Path.ChangeExtension(exe, ".dll")) || File.Exists(Path.ChangeExtension(exe, ".runtimeconfig.json"))
+            ? "this DiskTray.Compactor.exe is a development build, which isn't safe to run as admin. Install DiskTray from a release to compact"
+            : null;
 
     /// <summary>
     /// Creates the pipe. Before the Compactor starts, and only once, so nothing else can be on
@@ -113,6 +141,16 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
 
     /// <summary>Who may connect to the pipe, as Windows has it.</summary>
     internal PipeSecurity? PipeSecurity() => _pipe?.GetAccessControl();
+
+    /// <summary>
+    /// Waits for <paramref name="process"/> to connect to the pipe, then reads what it sends.
+    /// Until it connects, the process ending counts as the Compactor having ended.
+    /// </summary>
+    internal void Listen(Process process)
+    {
+        _process = process;
+        Listen(process.Id);
+    }
 
     /// <summary>Waits for the process <paramref name="clientId"/> to connect to the pipe, then reads what it sends.</summary>
     internal void Listen(int clientId)

@@ -9,5 +9,5 @@ internal static class UsageCacheFile
 
     public static UsageCache Load() => UsageCache.FromJson(AppDataFile.Read(Name));
 
-    public static void Save(UsageCache cache) => AppDataFile.Write(Name, cache.ToJson());
+    public static bool Save(UsageCache cache) => AppDataFile.Write(Name, cache.ToJson());
 }

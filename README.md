@@ -51,8 +51,8 @@ Each release has a `SHA256SUMS.txt` to check the download against
 Uninstall it from **Settings › Apps**. That also removes your DiskTray settings, logs and
 caches (`%LOCALAPPDATA%\DiskTray`) and its Startup apps entry, once you've said yes to
 the admin prompt. Docker and WSL aren't touched. DiskTray can't be upgraded or
-uninstalled while it's compacting a disk; the installer says so, and you can try again
-once it's done.
+uninstalled while it's compacting a disk: the installer says so, starts DiskTray again
+if the upgrade had closed it, and you can try again once DiskTray says it's done.
 
 Clean up needs Docker Desktop 4.39 or later, using the WSL 2 backend, to prune and to
 stop and start Docker around a compact.
@@ -85,7 +85,10 @@ dotnet test
 ```
 
 `dotnet test` runs the Windows tests too when run on Windows. A few of them need admin
-rights and are skipped without them; the GitHub Actions build runs them all.
+rights and are skipped without them; the GitHub Actions build runs them all, runs the
+Compactor tests again against the NativeAOT exe that ships, and installs, upgrades and
+uninstalls the MSI on its runner. The tests write DiskTray's log to a temp file, never
+to your own.
 
 ## Building the installer
 
@@ -95,8 +98,10 @@ admin, is compiled ahead of time with NativeAOT, which needs Windows and the C++
 tools.
 
 `scripts/build-msi.sh` builds `artifacts/msi/DiskTray-<version>-x64-dev.msi` from WSL,
-for trying the installer out, with a plain .NET Compactor (it also needs a .NET 6 or
-later SDK on Windows, since WiX only runs there).
+for trying the installer out (it also needs a .NET 6 or later SDK on Windows, since WiX
+only runs there). Its Compactor is a plain .NET build, which would take settings anything
+running as you can change into a process running as admin, so DiskTray won't run it:
+the dev MSI can't compact, nor do a dry run of compacting. Use a release to compact.
 
 ## Development copy
 

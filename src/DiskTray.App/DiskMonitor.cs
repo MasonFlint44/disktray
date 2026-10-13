@@ -17,7 +17,11 @@ internal sealed class DiskMonitor(DiskScanner scanner, UsageMeter meter, UsageCa
         pins ??= TrayPin.Defaults;
         folders.Track(pins.Where(p => p.Kind == PinKind.Path && p.Target is not null).Select(p => p.Target!));
         var snapshot = meter.Measure(scanner.Scan(pins, detect), askWsl);
-        UsageCacheFile.Save(cache);
+        if (cache.Changed && UsageCacheFile.Save(cache))
+        {
+            cache.MarkSaved();
+        }
+
         return snapshot;
     }
 }

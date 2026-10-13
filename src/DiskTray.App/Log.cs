@@ -11,7 +11,8 @@ internal static class Log
     private const long MaxBytes = 1024 * 1024;
     private static readonly Lock Gate = new();
 
-    public static string FilePath { get; } = Path.Combine(
+    /// <summary>The log file. Tests point it elsewhere, so they never write to the real one.</summary>
+    public static string FilePath { get; internal set; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "DiskTray", "logs", "disktray.log");
 
     public static void Info(string message) => Write("INFO", message, null);

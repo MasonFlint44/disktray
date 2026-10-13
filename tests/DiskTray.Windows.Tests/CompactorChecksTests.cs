@@ -7,6 +7,7 @@ using System.Security.Principal;
 using DiskTray.App;
 using DiskTray.Compactor;
 using DiskTray.Core.Compact;
+using Microsoft.Win32.SafeHandles;
 
 namespace DiskTray.Windows.Tests;
 
@@ -104,8 +105,52 @@ public partial class PathHoldTests
         using var temp = new TestFolder();
 
         Assert.Null(PathHold.Take(Path.Combine(temp.Path, "ext4.vhdx"), out string? problem));
-        Assert.Contains("couldn't be opened", problem);
+        Assert.Equal("it wasn't found", problem);
+        Assert.Null(PathHold.Take(Path.Combine(temp.Path, "gone", "ext4.vhdx"), out problem));
+        Assert.Equal($"{Path.Combine(temp.Path, "gone")} wasn't found", problem);
     }
+
+    [Fact]
+    public void Looks_at_a_disk_another_program_has_open_for_itself_but_cant_hold_it()
+    {
+        using var temp = new TestFolder();
+        string disk = temp.File(@"wsl\ext4.vhdx");
+        using var wsl = new FileStream(disk, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        using (var look = PathHold.Look(disk, out string? problem))
+        {
+            Assert.True(look is not null, problem);
+        }
+
+        Assert.Null(PathHold.Take(disk, out string? holdProblem));
+        Assert.Equal("it couldn't be opened (error 32)", holdProblem);
+    }
+
+    [Fact]
+    public void Refuses_a_path_through_a_drive_letter_made_for_a_folder()
+    {
+        using var temp = new TestFolder();
+        temp.File("ext4.vhdx");
+        char letter = "ZYXWVUTSRQPONMLKJIHGFED".First(l => !Directory.Exists($"{l}:\\"));
+        string drive = $"{letter}:";
+        Assert.True(DefineDosDevice(0, drive, temp.Path), $"DefineDosDevice failed ({Marshal.GetLastPInvokeError()})");
+        try
+        {
+            Assert.Null(PathHold.Take($@"{drive}\ext4.vhdx", out string? problem));
+            Assert.Equal("it's a link, or isn't where its path says", problem);
+        }
+        finally
+        {
+            DefineDosDevice(RemoveDefinition | ExactMatchOnRemove, drive, temp.Path);
+        }
+    }
+
+    private const uint RemoveDefinition = 0x2;
+    private const uint ExactMatchOnRemove = 0x4;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "DefineDosDeviceW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool DefineDosDevice(uint flags, string device, string target);
 
     private static string ShortPath(string path)
     {
@@ -128,13 +173,40 @@ public class UserAccessTests
     private static UserAccess OfThisProcess() =>
         UserAccess.OfProcess((uint)Environment.ProcessId, out string? problem) ?? throw new InvalidOperationException(problem);
 
+    /// <summary>Checks the file as the Compactor does: through a handle on it, not its path.</summary>
+    private static bool? CanWrite(UserAccess user, string path)
+    {
+        using var look = PathHold.Look(path, out string? problem) ?? throw new InvalidOperationException(problem);
+        return user.CanWrite(look.File);
+    }
+
+    /// <summary>Denies this account writing to <paramref name="path"/> until disposed.</summary>
+    internal static IDisposable DenyWriting(string path)
+    {
+        var deny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().User!, FileSystemRights.WriteData, AccessControlType.Deny);
+        var info = new FileInfo(path);
+        var security = info.GetAccessControl();
+        security.AddAccessRule(deny);
+        info.SetAccessControl(security);
+        return new Undo(() =>
+        {
+            security.RemoveAccessRule(deny);
+            info.SetAccessControl(security);
+        });
+    }
+
+    private sealed class Undo(Action undo) : IDisposable
+    {
+        public void Dispose() => undo();
+    }
+
     [Fact]
     public void Says_yes_for_a_file_the_account_can_change()
     {
         using var temp = new TestFolder();
         using var user = OfThisProcess();
 
-        Assert.True(user.CanWrite(temp.File("ext4.vhdx")));
+        Assert.True(CanWrite(user, temp.File("ext4.vhdx")));
     }
 
     [Fact]
@@ -142,28 +214,28 @@ public class UserAccessTests
     {
         using var temp = new TestFolder();
         string disk = temp.File("ext4.vhdx");
-        var me = WindowsIdentity.GetCurrent().User!;
-        var deny = new FileSystemAccessRule(me, FileSystemRights.WriteData, AccessControlType.Deny);
-        var info = new FileInfo(disk);
-        var security = info.GetAccessControl();
-        security.AddAccessRule(deny);
-        info.SetAccessControl(security);
-        try
-        {
-            using var user = OfThisProcess();
+        using var denied = DenyWriting(disk);
+        using var user = OfThisProcess();
 
-            Assert.False(user.CanWrite(disk));
-        }
-        finally
-        {
-            security.RemoveAccessRule(deny);
-            info.SetAccessControl(security);
-        }
+        Assert.False(CanWrite(user, disk));
+    }
+
+    [Fact]
+    public void Says_yes_for_a_file_the_account_can_change_while_wsl_has_it_open()
+    {
+        using var temp = new TestFolder();
+        string disk = temp.File("ext4.vhdx");
+        using var wsl = new FileStream(disk, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        using var user = OfThisProcess();
+
+        Assert.True(CanWrite(user, disk));
     }
 
     [Fact]
     public void Refuses_a_file_only_admins_can_change_for_an_admin_running_without_admin_rights()
     {
+        // The file is held as the Compactor holds it, with admin rights.
+        Admin.SkipUnlessElevated();
         using var temp = new TestFolder();
         string adminOnly = temp.File("admin-only.vhdx");
         string own = temp.File("own.vhdx");
@@ -179,8 +251,8 @@ public class UserAccessTests
             using var token = NonAdminToken.Create();
             using var user = UserAccess.OfToken(token, out string? problem) ?? throw new InvalidOperationException(problem);
 
-            Assert.False(user.CanWrite(adminOnly));
-            Assert.True(user.CanWrite(own));
+            Assert.False(CanWrite(user, adminOnly));
+            Assert.True(CanWrite(user, own));
         }
         finally
         {
@@ -191,10 +263,10 @@ public class UserAccessTests
     [Fact]
     public void Says_so_when_it_cant_tell()
     {
-        using var temp = new TestFolder();
         using var user = OfThisProcess();
+        using var nothing = new SafeFileHandle(0, ownsHandle: false);
 
-        Assert.Null(user.CanWrite(Path.Combine(temp.Path, "missing", "ext4.vhdx")));
+        Assert.Null(user.CanWrite(nothing));
     }
 
     [Fact]
@@ -211,7 +283,7 @@ public class UserAccessTests
         using var user = UserAccess.OfPipeServer(client.SafePipeHandle, out string? problem);
 
         Assert.Null(problem);
-        Assert.True(user!.CanWrite(temp.File("ext4.vhdx")));
+        Assert.True(CanWrite(user!, temp.File("ext4.vhdx")));
     }
 }
 
@@ -230,31 +302,22 @@ public class CompactDiskTests
     }
 
     [Fact]
-    public async Task Refuses_a_disk_the_account_that_asked_cant_change()
+    public async Task Refuses_a_disk_the_account_that_asked_cant_change_before_and_while_holding_it()
     {
         using var temp = new TestFolder();
         string disk = temp.File("ext4.vhdx");
-        var me = WindowsIdentity.GetCurrent().User!;
-        var deny = new FileSystemAccessRule(me, FileSystemRights.WriteData, AccessControlType.Deny);
-        var info = new FileInfo(disk);
-        var security = info.GetAccessControl();
-        security.AddAccessRule(deny);
-        info.SetAccessControl(security);
+        using var denied = UserAccessTests.DenyWriting(disk);
         var (server, client) = await ConnectedPipe();
-        try
+        using (server)
+        using (var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _))
+        using (var host = new PipeHost(client, user, null))
         {
-            using var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _);
-            using var host = new PipeHost(client, user, null);
             var progress = new List<int>();
+            const string refusal = "the account that asked can't change it, so it isn't DiskTray's to compact";
 
-            Assert.Equal("Didn't compact ext4.vhdx: the account that asked can't change it, so it isn't DiskTray's to compact.", host.CompactDisk(disk, progress.Add));
+            Assert.Equal(refusal, host.Check(disk));
+            Assert.Equal(refusal, host.CompactDisk(disk, progress.Add));
             Assert.Empty(progress);
-        }
-        finally
-        {
-            server.Dispose();
-            security.RemoveAccessRule(deny);
-            info.SetAccessControl(security);
         }
     }
 
@@ -262,13 +325,15 @@ public class CompactDiskTests
     public async Task Refuses_every_disk_when_it_couldnt_tell_which_account_asked()
     {
         using var temp = new TestFolder();
+        string disk = temp.File("ext4.vhdx");
         var (server, client) = await ConnectedPipe();
         using (server)
         using (var host = new PipeHost(client, null, "couldn't read which account asked (error 5)"))
         {
             var progress = new List<int>();
 
-            Assert.Equal("Didn't compact ext4.vhdx: the Compactor couldn't read which account asked (error 5).", host.CompactDisk(temp.File("ext4.vhdx"), progress.Add));
+            Assert.Equal("the Compactor couldn't read which account asked (error 5)", host.Check(disk));
+            Assert.Equal("the Compactor couldn't read which account asked (error 5)", host.CompactDisk(disk, progress.Add));
             Assert.Empty(progress);
         }
     }
@@ -282,7 +347,25 @@ public class CompactDiskTests
         using (var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _))
         using (var host = new PipeHost(client, user, null))
         {
-            Assert.StartsWith("Didn't compact ext4.vhdx: it couldn't be opened", host.CompactDisk(Path.Combine(temp.Path, "ext4.vhdx"), _ => { }));
+            string missing = Path.Combine(temp.Path, "ext4.vhdx");
+
+            Assert.Equal("it wasn't found", host.Check(missing));
+            Assert.Equal("it wasn't found", host.CompactDisk(missing, _ => { }));
+        }
+    }
+
+    [Fact]
+    public async Task Passes_a_disk_the_account_can_change_even_while_wsl_has_it_open()
+    {
+        using var temp = new TestFolder();
+        string disk = temp.File("ext4.vhdx");
+        var (server, client) = await ConnectedPipe();
+        using (server)
+        using (var user = UserAccess.OfProcess((uint)Environment.ProcessId, out _))
+        using (var host = new PipeHost(client, user, null))
+        using (new FileStream(disk, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.Null(host.Check(disk));
         }
     }
 }
@@ -360,9 +443,20 @@ public class CompactTests
         Assert.True(before - after >= dataBytes * 3 / 4, $"Compacting took {before} bytes to {after}.");
     }
 
-    /// <summary>Where the build put the Compactor, framework-dependent as the tests are.</summary>
+    /// <summary>
+    /// The Compactor exe these run: the one DISKTRAY_COMPACTOR_EXE names (the GitHub Actions
+    /// build points it at the NativeAOT publish that ships, which must then be native), or else
+    /// where the build put it, framework-dependent as the tests are.
+    /// </summary>
     private static string CompactorExe()
     {
+        if (Environment.GetEnvironmentVariable("DISKTRAY_COMPACTOR_EXE") is { Length: > 0 } named)
+        {
+            Assert.True(File.Exists(named), $"DISKTRAY_COMPACTOR_EXE is {named}, which isn't there.");
+            Assert.Null(CompactorLauncher.NotNative(named));
+            return named;
+        }
+
         string beside = Path.Combine(AppContext.BaseDirectory, "DiskTray.Compactor.exe");
         if (File.Exists(beside) && File.Exists(Path.ChangeExtension(beside, ".runtimeconfig.json")))
         {
@@ -396,6 +490,16 @@ public class CompactTests
         return Process.Start(start)!;
     }
 
+    /// <summary>Opens the app's end of the pipe and starts the Compactor on it, as Clean up does.</summary>
+    private static (CompactorLauncher Launcher, Process Compactor) Start(CompactorArgs args)
+    {
+        var launcher = new CompactorLauncher();
+        launcher.OpenPipe(args.Pipe);
+        var compactor = StartCompactor(args.ToArgs());
+        launcher.Listen(compactor);
+        return (launcher, compactor);
+    }
+
     private static string TestDiskIn(TestFolder temp, string relative)
     {
         string disk = Path.Combine(temp.Path, relative);
@@ -405,6 +509,7 @@ public class CompactTests
     }
 
     [Fact]
+    [Trait("Compactor", "exe")]
     public void The_compactor_compacts_what_the_app_asks_once_told_to_go()
     {
         Admin.SkipUnlessElevated();
@@ -412,24 +517,24 @@ public class CompactTests
         string one = TestDiskIn(temp, @"docker\disk\docker_data.vhdx");
         string two = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
 
-        using var launcher = new CompactorLauncher();
-        var args = new CompactorArgs(CompactorArgs.NewPipeName(), [one, two]);
-        launcher.OpenPipe(args.Pipe);
-        using var compactor = StartCompactor(args.ToArgs());
-        launcher.Listen(compactor.Id);
+        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [one, two]));
+        using (launcher)
+        using (compactor)
+        {
+            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
+            launcher.Signal(CompactorMessages.Go);
+            var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
 
-        Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-        launcher.Signal(CompactorMessages.Go);
-        var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
-
-        Assert.True(final.State == CompactState.Done, final.Message);
-        Assert.Equal([one, two], final.Results!.Select(r => r.Path));
-        Assert.All(final.Results!, r => Assert.Null(r.Problem));
-        Assert.True(compactor.WaitForExit(Timeout));
-        Assert.Equal(0, compactor.ExitCode);
+            Assert.True(final.State == CompactState.Done, final.Message);
+            Assert.Equal([one, two], final.Results!.Select(r => r.Path));
+            Assert.All(final.Results!, r => Assert.Null(r.Problem));
+            Assert.True(compactor.WaitForExit(Timeout));
+            Assert.Equal(0, compactor.ExitCode);
+        }
     }
 
     [Fact]
+    [Trait("Compactor", "exe")]
     public void The_compactor_changes_nothing_on_a_dry_run()
     {
         Admin.SkipUnlessElevated();
@@ -438,25 +543,49 @@ public class CompactTests
         var written = File.GetLastWriteTimeUtc(disk);
         long size = new FileInfo(disk).Length;
 
-        using var launcher = new CompactorLauncher();
-        var args = new CompactorArgs(CompactorArgs.NewPipeName(), [disk], DryRun: true);
-        launcher.OpenPipe(args.Pipe);
-        using var compactor = StartCompactor(args.ToArgs());
-        launcher.Listen(compactor.Id);
+        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk], DryRun: true));
+        using (launcher)
+        using (compactor)
+        {
+            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
+            launcher.Signal(CompactorMessages.Go);
+            var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
 
-        Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-        launcher.Signal(CompactorMessages.Go);
-        var final = Statuses.WaitFor(launcher, s => s.Finished, Timeout);
-
-        Assert.Equal(CompactState.Done, final.State);
-        Assert.True(final.DryRun);
-        Assert.Equal(new DiskResult(disk, size, size), Assert.Single(final.Results!));
-        Assert.True(compactor.WaitForExit(Timeout));
-        Assert.Equal(0, compactor.ExitCode);
-        Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
+            Assert.Equal(CompactState.Done, final.State);
+            Assert.True(final.DryRun);
+            Assert.Equal(new DiskResult(disk, size, size), Assert.Single(final.Results!));
+            Assert.True(compactor.WaitForExit(Timeout));
+            Assert.Equal(0, compactor.ExitCode);
+            Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
+        }
     }
 
     [Fact]
+    [Trait("Compactor", "exe")]
+    public void The_compactor_refuses_before_it_says_its_ready_when_it_would_refuse_every_disk()
+    {
+        Admin.SkipUnlessElevated();
+        using var temp = new TestFolder();
+        string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
+        using var denied = UserAccessTests.DenyWriting(disk);
+
+        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        using (launcher)
+        using (compactor)
+        {
+            var first = Statuses.WaitFor(launcher, _ => true, Timeout);
+
+            // Its first word, so the app never stops Docker or WSL for it.
+            Assert.Equal(CompactState.Failed, first.State);
+            Assert.StartsWith("Nothing was shut down or compacted.", first.Message);
+            Assert.Contains("the account that asked can't change it", first.Message);
+            Assert.True(compactor.WaitForExit(Timeout));
+            Assert.Equal(3, compactor.ExitCode);
+        }
+    }
+
+    [Fact]
+    [Trait("Compactor", "exe")]
     public void The_compactor_stops_without_compacting_when_the_app_goes_away()
     {
         Admin.SkipUnlessElevated();
@@ -464,20 +593,41 @@ public class CompactTests
         string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
         var written = File.GetLastWriteTimeUtc(disk);
 
-        var launcher = new CompactorLauncher();
-        var args = new CompactorArgs(CompactorArgs.NewPipeName(), [disk]);
-        launcher.OpenPipe(args.Pipe);
-        using var compactor = StartCompactor(args.ToArgs());
-        launcher.Listen(compactor.Id);
-        Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
-        launcher.Dispose();
+        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        using (compactor)
+        {
+            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
+            launcher.Dispose();
 
-        Assert.True(compactor.WaitForExit(Timeout));
-        Assert.Equal(2, compactor.ExitCode);
-        Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
+            Assert.True(compactor.WaitForExit(Timeout));
+            Assert.Equal(2, compactor.ExitCode);
+            Assert.Equal(written, File.GetLastWriteTimeUtc(disk));
+        }
+    }
+
+    /// <summary>Once told to go, it finishes even if the app exits straight away, as it may once WSL is down.</summary>
+    [Fact]
+    [Trait("Compactor", "exe")]
+    public void The_compactor_carries_on_when_the_app_goes_away_after_saying_go()
+    {
+        Admin.SkipUnlessElevated();
+        using var temp = new TestFolder();
+        string disk = TestDiskIn(temp, @"Ubuntu\ext4.vhdx");
+
+        var (launcher, compactor) = Start(new CompactorArgs(CompactorArgs.NewPipeName(), [disk]));
+        using (compactor)
+        {
+            Statuses.WaitFor(launcher, s => s.State == CompactState.Waiting, Timeout);
+            launcher.Signal(CompactorMessages.Go);
+            launcher.Dispose();
+
+            Assert.True(compactor.WaitForExit(Timeout));
+            Assert.Equal(0, compactor.ExitCode);
+        }
     }
 
     [Fact]
+    [Trait("Compactor", "exe")]
     public void The_compactor_quits_on_arguments_it_doesnt_take()
     {
         Admin.SkipUnlessElevated();
@@ -489,6 +639,7 @@ public class CompactTests
     }
 
     [Fact]
+    [Trait("Compactor", "exe")]
     public void The_compactor_quits_when_there_is_no_app_to_talk_to()
     {
         Admin.SkipUnlessElevated();
@@ -511,5 +662,71 @@ public class ProtectedFolderTests
         string exe = temp.File("DiskTray.Compactor.exe");
 
         Assert.Contains("can be changed without admin permission", ProtectedFolder.FolderProblem(exe));
+    }
+
+    /// <summary>
+    /// What the installer's folder is like: only admins and Windows can change it or the
+    /// folders above it. Checked as an admin's everyday token, as DiskTray runs.
+    /// </summary>
+    [Fact]
+    public void Lets_through_a_compactor_only_admins_can_change()
+    {
+        Admin.SkipUnlessElevated();
+        var folder = Directory.CreateDirectory(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "DiskTray.Tests-" + Guid.NewGuid().ToString("N")));
+        try
+        {
+            var locked = new DirectorySecurity();
+            locked.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            locked.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+            locked.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
+            locked.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
+            // As in Program Files: being the owner gives no extra rights.
+            locked.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier("S-1-3-4"), FileSystemRights.ReadAndExecute, inherit, PropagationFlags.None, AccessControlType.Allow));
+            folder.SetAccessControl(locked);
+            string exe = Path.Combine(folder.FullName, "DiskTray.Compactor.exe");
+            File.WriteAllText(exe, "not really an exe");
+            File.WriteAllText(Path.Combine(folder.FullName, "DiskTray.dll"), "nor a dll");
+
+            using var token = NonAdminToken.Create();
+            string? problem = WindowsIdentity.RunImpersonated(token, () => ProtectedFolder.FolderProblem(exe));
+
+            Assert.Null(problem);
+        }
+        finally
+        {
+            folder.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Tells_a_development_compactor_from_the_native_one()
+    {
+        using var temp = new TestFolder();
+        string exe = temp.File(@"native\DiskTray.Compactor.exe");
+        temp.File(@"native\DiskTray.dll");
+        string dotnet = temp.File(@"dotnet\DiskTray.Compactor.exe");
+        temp.File(@"dotnet\DiskTray.Compactor.dll");
+
+        Assert.Null(CompactorLauncher.NotNative(exe));
+        Assert.Contains("development build", CompactorLauncher.NotNative(dotnet));
+    }
+
+    /// <summary>
+    /// The Compactor the MSI installed, on the GitHub Actions runner, which sets
+    /// DISKTRAY_INSTALLED_COMPACTOR to it: what DiskTray checks before running it as admin.
+    /// </summary>
+    [Fact]
+    [Trait("Compactor", "installed")]
+    public void Lets_through_the_compactor_the_installer_put_in_place()
+    {
+        string? exe = Environment.GetEnvironmentVariable("DISKTRAY_INSTALLED_COMPACTOR");
+        Assert.SkipWhen(string.IsNullOrEmpty(exe), "Runs once the MSI is installed (DISKTRAY_INSTALLED_COMPACTOR).");
+        Admin.SkipUnlessElevated();
+
+        using var token = NonAdminToken.Create();
+
+        Assert.Null(CompactorLauncher.NotNative(exe!));
+        Assert.Null(WindowsIdentity.RunImpersonated(token, () => ProtectedFolder.FolderProblem(exe!)));
     }
 }

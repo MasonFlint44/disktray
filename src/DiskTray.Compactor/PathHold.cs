@@ -11,6 +11,10 @@ namespace DiskTray.Compactor;
 /// sharing, so none can be renamed, removed or replaced until this is disposed; none may be
 /// a link, and the file may have no other names (hard links).
 /// </summary>
+/// <remarks>
+/// The held file's handle is what the account check opens again, rather than the path, so
+/// the check is of the file that gets compacted, however the path would look to the user.
+/// </remarks>
 internal sealed partial class PathHold : IDisposable
 {
     private const uint FileReadAttributes = 0x80;
@@ -28,13 +32,27 @@ internal sealed partial class PathHold : IDisposable
     private const uint OpenReparsePoint = 0x0020_0000;
     private const uint ReparsePointAttribute = 0x400;
     private const uint VolumeNameDos = 0;
+    private const int ErrorFileNotFound = 2;
+    private const int ErrorPathNotFound = 3;
 
     private readonly List<SafeFileHandle> _handles;
 
     private PathHold(List<SafeFileHandle> handles) => _handles = handles;
 
-    /// <summary>Holds the path, or returns null with why it can't be.</summary>
-    public static PathHold? Take(string path, out string? problem)
+    /// <summary>The disk file, held open; it's always the last handle taken.</summary>
+    public SafeFileHandle File => _handles[^1];
+
+    /// <summary>Holds the path for compacting, or returns null with why it can't be.</summary>
+    public static PathHold? Take(string path, out string? problem) => Take(path, DataAccess, out problem);
+
+    /// <summary>
+    /// Makes the same checks without holding the file's data: opened only to read its
+    /// attributes, which works while WSL still has the disk open. For the checks before
+    /// anything is shut down, and for dry runs.
+    /// </summary>
+    public static PathHold? Look(string path, out string? problem) => Take(path, 0, out problem);
+
+    private static PathHold? Take(string path, uint fileAccess, out string? problem)
     {
         var folders = new List<string>();
         for (string? folder = Path.GetDirectoryName(path); folder is not null; folder = Path.GetDirectoryName(folder))
@@ -50,8 +68,8 @@ internal sealed partial class PathHold : IDisposable
             var handle = Open(folder, DataAccess, ShareRead | ShareWrite, BackupSemantics);
             if (handle.IsInvalid)
             {
+                problem = $"{folder} {OpenProblem(Marshal.GetLastPInvokeError())}";
                 hold.Dispose();
-                problem = $"{folder} couldn't be opened (error {Marshal.GetLastPInvokeError()})";
                 return null;
             }
 
@@ -65,11 +83,11 @@ internal sealed partial class PathHold : IDisposable
         }
 
         // Read and write sharing, so Windows' virtual disk service can still open it to compact.
-        var file = Open(path, DataAccess, ShareRead | ShareWrite, 0);
+        var file = Open(path, fileAccess, ShareRead | ShareWrite, 0);
         if (file.IsInvalid)
         {
+            problem = $"it {OpenProblem(Marshal.GetLastPInvokeError())}";
             hold.Dispose();
-            problem = $"it couldn't be opened (error {Marshal.GetLastPInvokeError()})";
             return null;
         }
 
@@ -102,6 +120,9 @@ internal sealed partial class PathHold : IDisposable
 
         _handles.Clear();
     }
+
+    private static string OpenProblem(int error) =>
+        error is ErrorFileNotFound or ErrorPathNotFound ? "wasn't found" : $"couldn't be opened (error {error})";
 
     /// <summary>Opens the link itself rather than what it points to, so a link is seen as one.</summary>
     private static SafeFileHandle Open(string path, uint access, uint share, uint flags) =>

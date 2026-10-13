@@ -11,7 +11,7 @@ public class InterruptedCleanupTests
     private int _compactorChecksLeft;
     private int _delays;
 
-    private Task<string?> Finish(CleanupMarker? marker) =>
+    private Task<CleanupNotice?> Finish(CleanupMarker? marker) =>
         new InterruptedCleanup(
             _docker,
             _wsl,
@@ -35,19 +35,46 @@ public class InterruptedCleanupTests
     {
         _compactorChecksLeft = 3;
 
-        string? said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
 
         Assert.Equal(3, _delays);
         Assert.Equal(["desktop start --detach"], _docker.Calls);
-        Assert.Equal("DiskTray closed during a clean up. Compacting carried on without it. DiskTray has started Docker Desktop again.", said);
+        Assert.Equal(new CleanupNotice("Clean up ended", "DiskTray closed during a clean up. Compacting carried on without it. DiskTray has started Docker Desktop again."), said);
+    }
+
+    [Fact]
+    public async Task Waits_for_a_compactor_that_stopped_answering_then_starts_docker_again()
+    {
+        _compactorChecksLeft = 2;
+
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true, StoppedAnswering: true));
+
+        Assert.Equal(2, _delays);
+        Assert.Equal(["desktop start --detach"], _docker.Calls);
+        Assert.Equal("Clean up ended", said!.Title);
+        Assert.StartsWith("The Compactor that stopped answering has ended. DiskTray can't tell how compacting went", said.Body);
+    }
+
+    [Fact]
+    public async Task Stops_waiting_for_a_compactor_that_never_ends()
+    {
+        _compactorChecksLeft = int.MaxValue;
+
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
+
+        Assert.Equal((int)(InterruptedCleanup.WaitLimit / InterruptedCleanup.CheckInterval), _delays);
+        Assert.Empty(_docker.Calls);
+        Assert.Equal("Clean up didn't finish", said!.Title);
+        Assert.Contains("still running after 2 hours", said.Body);
+        Assert.Contains("Start Docker Desktop yourself once DiskTray.Compactor has ended", said.Body);
     }
 
     [Fact]
     public async Task Says_nothing_was_compacted_when_it_closed_before_compacting_started()
     {
-        string? said = await Finish(new CleanupMarker(StartDockerAfter: false, StoppedAt));
+        var said = await Finish(new CleanupMarker(StartDockerAfter: false, StoppedAt));
 
-        Assert.Equal("DiskTray closed during a clean up, before compacting started, so nothing was compacted.", said);
+        Assert.Equal(new CleanupNotice("Clean up didn't finish", "DiskTray closed during a clean up, before compacting started, so nothing was compacted."), said);
         Assert.Empty(_docker.Calls);
     }
 
@@ -80,15 +107,15 @@ public class InterruptedCleanupTests
     {
         _docker.Failing.Add("desktop start");
 
-        string? said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
+        var said = await Finish(new CleanupMarker(StartDockerAfter: true, StoppedAt, Compacting: true));
 
-        Assert.EndsWith("and DiskTray couldn't start Docker Desktop again. Start it yourself.", said);
+        Assert.EndsWith("and DiskTray couldn't start Docker Desktop again. Start it yourself.", said!.Body);
     }
 
     [Fact]
     public void Round_trips_the_marker_through_json()
     {
-        var marker = new CleanupMarker(true, StoppedAt, Compacting: true);
+        var marker = new CleanupMarker(true, StoppedAt, Compacting: true, StoppedAnswering: true);
 
         Assert.Equal(marker, CleanupMarker.FromJson(marker.ToJson()));
     }
@@ -101,6 +128,11 @@ public class InterruptedCleanupTests
     public void Reads_an_unusable_marker_as_none(string? json) => Assert.Null(CleanupMarker.FromJson(json));
 
     [Fact]
-    public void Reads_a_marker_from_before_compacting_was_recorded_as_not_compacting() =>
-        Assert.False(CleanupMarker.FromJson("""{"startDockerAfter":true,"stoppedAt":"2026-10-11T14:00:00+00:00"}""")!.Compacting);
+    public void Reads_a_marker_from_before_compacting_was_recorded_as_not_compacting()
+    {
+        var marker = CleanupMarker.FromJson("""{"startDockerAfter":true,"stoppedAt":"2026-10-11T14:00:00+00:00"}""")!;
+
+        Assert.False(marker.Compacting);
+        Assert.False(marker.StoppedAnswering);
+    }
 }

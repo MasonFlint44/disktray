@@ -34,6 +34,11 @@ public class CompactorArgsTests
     [InlineData(@"C:\disks\other.txt:data.vhdx")]
     [InlineData(@"C:\disks\*.vhdx")]
     [InlineData(@"\\?\C:\disks\data.vhdx")]
+    [InlineData(@"C:\disks\NUL.vhdx")]
+    [InlineData(@"C:\disks\com1.vhdx")]
+    [InlineData(@"C:\disks\LPT¹.vhdx")]
+    [InlineData(@"C:\aux\data.vhdx")]
+    [InlineData(@"C:\CON.old\data.vhdx")]
     public void Refuses_anything_but_a_local_vhdx(string disk)
     {
         Assert.Null(CompactorArgs.Parse((Args with { Disks = [disk] }).ToArgs(), out string? problem));
@@ -46,6 +51,8 @@ public class CompactorArgsTests
     [InlineData(@"D:\My Disks\WSL images\ext4.vhdx")]
     [InlineData(@"E:\Données\ディスク\ext4.vhdx")]
     [InlineData(@"C:\a.b\.hidden\ext4.vhdx")]
+    [InlineData(@"C:\console\com10.vhdx")]
+    [InlineData(@"C:\nullable\auxiliary.vhdx")]
     public void Takes_a_plain_local_vhdx(string disk) => Assert.True(CompactorArgs.IsVhdx(disk));
 
     [Theory]
@@ -141,6 +148,12 @@ internal sealed class FakeCompactorHost : ICompactorHost
     /// <summary>Why compacting fails, or null for it to work.</summary>
     public string? Failure { get; set; }
 
+    /// <summary>Disks the checks before waiting refuse, with why.</summary>
+    public Dictionary<string, string> Refused { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Every disk whose size was asked for.</summary>
+    public List<string> SizesAsked { get; } = [];
+
     public List<CompactStatus> Statuses { get; } = [];
 
     public List<string> Compacted { get; } = [];
@@ -152,7 +165,13 @@ internal sealed class FakeCompactorHost : ICompactorHost
 
     public AppSignal Poll() => Signal;
 
-    public long? FileSize(string path) => Sizes.TryGetValue(path, out long size) ? size : null;
+    public string? Check(string path) => Refused.GetValueOrDefault(path);
+
+    public long? FileSize(string path)
+    {
+        SizesAsked.Add(path);
+        return Sizes.TryGetValue(path, out long size) ? size : null;
+    }
 
     public bool InUse(string path)
     {
@@ -256,7 +275,7 @@ public class CompactorRunTests
 
         Assert.Equal([A, B], host.Compacted);
         Assert.Equal(CompactState.Failed, host.Statuses[^1].State);
-        Assert.Equal($"Couldn't compact {A}: The parameter is incorrect. (87)", host.Statuses[^1].Results![0].Problem);
+        Assert.Equal($"Couldn't compact {A}: The parameter is incorrect. (87).", host.Statuses[^1].Results![0].Problem);
     }
 
     [Fact]
@@ -308,6 +327,53 @@ public class CompactorRunTests
     [InlineData(AppSignal.None, AppSignal.None, AppSignal.None)]
     public void Keeps_the_first_thing_the_app_says(AppSignal current, AppSignal next, AppSignal kept) =>
         Assert.Equal(kept, CompactorMessages.Latch(current, next));
+
+    [Fact]
+    public void Refuses_before_saying_its_ready_when_it_would_refuse_every_disk()
+    {
+        var host = Host();
+        host.Refused[A] = "the account that asked can't change it";
+        host.Refused[B] = "it's a link";
+
+        Assert.Equal(3, Run(host));
+
+        // The app reads a first status other than Waiting as "don't stop anything".
+        var only = Assert.Single(host.Statuses);
+        Assert.Equal(CompactState.Failed, only.State);
+        Assert.Equal($"Nothing was shut down or compacted. Didn't compact {A}: the account that asked can't change it. Didn't compact {B}: it's a link.", only.Message);
+        Assert.Equal([new DiskResult(A, null, null, $"Didn't compact {A}: the account that asked can't change it."), new DiskResult(B, null, null, $"Didn't compact {B}: it's a link.")], only.Results);
+        Assert.Empty(host.Compacted);
+        Assert.Empty(host.SizesAsked);
+    }
+
+    [Fact]
+    public void Leaves_out_a_disk_it_would_refuse_and_compacts_the_rest()
+    {
+        var host = Host();
+        host.Refused[A] = "the account that asked can't change it";
+        host.BusyFor[A] = 1000;
+
+        Assert.Equal(1, Run(host));
+
+        Assert.Equal(CompactState.Waiting, host.Statuses[0].State);
+        Assert.Equal([B], host.Compacted);
+        Assert.Equal([B, B], host.SizesAsked);
+        var final = host.Statuses[^1];
+        Assert.Equal(CompactState.Failed, final.State);
+        Assert.Equal([new DiskResult(A, null, null, $"Didn't compact {A}: the account that asked can't change it."), new DiskResult(B, 400, 100)], final.Results);
+    }
+
+    [Fact]
+    public void Makes_the_same_checks_on_a_dry_run()
+    {
+        var host = Host();
+        host.Refused[B] = "it's a link";
+
+        Assert.Equal(1, Run(host, dryRun: true));
+
+        Assert.Empty(host.Compacted);
+        Assert.Equal([new DiskResult(A, 1000, 1000), new DiskResult(B, null, null, $"Didn't compact {B}: it's a link.")], host.Statuses[^1].Results);
+    }
 
     [Fact]
     public void Runs_nothing_on_a_dry_run()
@@ -1032,9 +1098,41 @@ public class CleanupRunTests
         var result = await Run(Request(prune: false), onDelay: _ => waited += CleanupRun.StatusInterval);
 
         Assert.Contains("stopped answering", result.Problem);
-        Assert.Contains("Start Docker Desktop yourself", result.Problem);
+        Assert.Contains("starts Docker Desktop again once the Compactor has ended", result.Problem);
+        Assert.True(result.CompactorMayBeRunning);
         Assert.DoesNotContain("desktop start --detach", _docker.Calls);
         Assert.InRange(waited, CompactorRun.QuietLimit, CompactorRun.QuietLimit + TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Keeps_the_run_record_only_while_the_compactor_may_still_be_running()
+    {
+        var saved = new CleanupMarker(StartDockerAfter: true, DateTimeOffset.UnixEpoch, Compacting: true);
+        var quiet = new CleanupResult(Request(), 0, [], null, "The Compactor stopped answering.") { CompactorMayBeRunning = true };
+        var finished = quiet with { CompactorMayBeRunning = false, Problem = null };
+
+        Assert.Equal(saved with { StoppedAnswering = true }, quiet.RecordAfter(saved));
+        Assert.Null(finished.RecordAfter(saved));
+        // A dry run saves no record, so there's nothing to keep.
+        Assert.Null(quiet.RecordAfter(null));
+    }
+
+    [Fact]
+    public async Task Stops_nothing_when_the_compactor_refuses_every_disk_before_it_waits()
+    {
+        _wsl.Running.Add("Ubuntu");
+        _launcher.Final = new CompactStatus(
+            CompactState.Failed,
+            Message: "Nothing was shut down or compacted. Didn't compact it: the account that asked can't change it.",
+            Results: [new DiskResult(Docker.Path, null, null, "Didn't compact it: the account that asked can't change it.")]);
+
+        var result = await Run(Request());
+
+        Assert.Equal(["admin granted"], _events);
+        Assert.DoesNotContain(_docker.Calls, c => c.StartsWith("desktop", StringComparison.Ordinal));
+        Assert.Equal("Nothing was shut down or compacted. Didn't compact it: the account that asked can't change it.", result.Problem);
+        Assert.Equal(17L << 30, result.PrunedBytes);
+        Assert.Empty(_milestones);
     }
 
     [Fact]
@@ -1115,6 +1213,30 @@ public class CleanupRunTests
 
         Assert.Equal(asks, progress.ExitQuestion is not null);
         Assert.Equal(quiet, progress.KeepsWslQuiet);
+    }
+
+    [Theory]
+    [InlineData(CleanupStep.Pruning, "pruning Docker")]
+    [InlineData(CleanupStep.AskingForAdmin, "waiting to compact")]
+    [InlineData(CleanupStep.WaitingForIdle, "waiting to compact")]
+    [InlineData(CleanupStep.StoppingDocker, null)]
+    [InlineData(CleanupStep.ShuttingDownWsl, null)]
+    [InlineData(CleanupStep.Compacting, null)]
+    [InlineData(CleanupStep.StartingDocker, null)]
+    [InlineData(CleanupStep.FinishingEarlierRun, null)]
+    public void Says_when_being_closed_from_outside_drops_a_clean_up_the_next_start_wont_finish(CleanupStep step, string? says)
+    {
+        string? notice = new CleanupProgress(step, "").ClosedNotice;
+
+        if (says is null)
+        {
+            Assert.Null(notice);
+        }
+        else
+        {
+            Assert.Contains(says, notice);
+            Assert.Contains("nothing was compacted", notice);
+        }
     }
 
     [Fact]

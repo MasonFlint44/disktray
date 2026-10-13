@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Security.AccessControl;
@@ -20,6 +21,8 @@ public class PipeTests
     private sealed class PipeOnlyHost(PipeHost pipe) : ICompactorHost
     {
         public AppSignal Poll() => pipe.Poll();
+
+        public string? Check(string path) => null;
 
         public long? FileSize(string path) => 1000;
 
@@ -126,6 +129,19 @@ public class PipeTests
             Assert.True(launcher.HasExited);
             Assert.Null(launcher.ReadStatus());
         }
+    }
+
+    [Fact]
+    public void Counts_a_compactor_that_ends_before_it_connects_as_ended()
+    {
+        using var launcher = new CompactorLauncher();
+        launcher.OpenPipe(CompactorArgs.NewPipeName());
+        using var quick = Process.Start(new ProcessStartInfo("cmd.exe", ["/c", "exit", "0"]) { CreateNoWindow = true, UseShellExecute = false })!;
+        launcher.Listen(quick);
+
+        Assert.True(quick.WaitForExit(Timeout));
+        Assert.True(launcher.HasExited);
+        Assert.Null(launcher.ReadStatus());
     }
 
     [Fact]

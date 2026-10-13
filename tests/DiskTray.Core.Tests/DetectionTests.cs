@@ -184,6 +184,15 @@ public class DiskScannerTests
     }
 
     [Fact]
+    public void Notes_docker_desktops_own_disks_without_showing_them()
+    {
+        var snapshot = Machine.Scan();
+
+        Assert.Equal([@"C:\Users\me\AppData\Local\Docker\wsl\main\ext4.vhdx"], snapshot.DockerSystemDisks);
+        Assert.DoesNotContain(snapshot.Files, f => f.Path.Contains(@"\main\", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void Measures_other_drives_that_hold_disk_files()
     {
         var probe = Machine.Probe();

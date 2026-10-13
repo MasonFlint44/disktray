@@ -77,6 +77,10 @@ public sealed class DiskScanner(IDiskProbe probe, IWslRegistry registry, ScanPat
         return new DiskSnapshot(clock.GetUtcNow(), systemDrive, drives, files, PickPrimaryDistro(files, registryData.DefaultDistributionId))
         {
             NotDetected = notDetected,
+            DockerSystemDisks = distros
+                .Where(d => d.IsDockerOwned && !files.Any(f => string.Equals(f.Path, d.VhdxPath, StringComparison.OrdinalIgnoreCase)))
+                .Select(d => d.VhdxPath)
+                .ToList(),
         };
     }
 

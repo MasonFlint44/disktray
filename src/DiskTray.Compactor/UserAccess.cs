@@ -19,7 +19,6 @@ internal sealed partial class UserAccess : IDisposable
     private const int TokenTypeImpersonation = 2;
     private const uint FileWriteData = 0x2;
     private const uint ShareAll = 0x7;
-    private const uint OpenExisting = 3;
     private const int ErrorAccessDenied = 5;
     private const int ErrorSharingViolation = 32;
     private const int ErrorLockViolation = 33;
@@ -48,9 +47,11 @@ internal sealed partial class UserAccess : IDisposable
         // Another account's DiskTray (a standard user who typed an admin's password) may only
         // be readable with the debug privilege, which admins have but don't use by default.
         var token = ImpersonationToken(id, out int error);
-        if (token is null && error == ErrorAccessDenied && EnableDebugPrivilege())
+        if (token is null && error == ErrorAccessDenied && SetDebugPrivilege(true))
         {
             token = ImpersonationToken(id, out error);
+            // Only needed for that; off again, so nothing later runs with it.
+            SetDebugPrivilege(false);
         }
 
         problem = token is null ? $"couldn't read which account asked (error {error})" : null;
@@ -66,10 +67,12 @@ internal sealed partial class UserAccess : IDisposable
     }
 
     /// <summary>
-    /// Whether that account could open the file to change it: null when that can't be told,
-    /// which callers treat as no.
+    /// Whether that account could open the held file to change it: null when that can't be
+    /// told, which callers treat as no. The handle is opened again, not the path, since a
+    /// path can lead somewhere else for the user (their own drive letters, say) than for this
+    /// admin process.
     /// </summary>
-    public bool? CanWrite(string path)
+    public bool? CanWrite(SafeFileHandle file)
     {
         if (!ImpersonateLoggedOnUser(_token))
         {
@@ -79,7 +82,7 @@ internal sealed partial class UserAccess : IDisposable
         int error;
         try
         {
-            using var handle = CreateFile(path, FileWriteData, ShareAll, 0, OpenExisting, 0, 0);
+            using var handle = ReOpenFile(file, FileWriteData, ShareAll, 0);
             error = handle.IsInvalid ? Marshal.GetLastPInvokeError() : 0;
         }
         finally
@@ -93,7 +96,7 @@ internal sealed partial class UserAccess : IDisposable
 
         return error switch
         {
-            // A sharing problem comes after the permission check passed.
+            // A sharing problem (WSL still has the disk open) comes after the permission check passed.
             0 or ErrorSharingViolation or ErrorLockViolation => true,
             ErrorAccessDenied => false,
             _ => null,
@@ -137,7 +140,8 @@ internal sealed partial class UserAccess : IDisposable
         return copy;
     }
 
-    private static bool EnableDebugPrivilege()
+    /// <summary>Turns SeDebugPrivilege on or off. True when it was changed.</summary>
+    private static bool SetDebugPrivilege(bool on)
     {
         if (!LookupPrivilegeValue(null, "SeDebugPrivilege", out long luid))
         {
@@ -151,7 +155,7 @@ internal sealed partial class UserAccess : IDisposable
 
         using (token)
         {
-            var privileges = new TokenPrivileges { Count = 1, Luid = luid, Attributes = SePrivilegeEnabled };
+            var privileges = new TokenPrivileges { Count = 1, Luid = luid, Attributes = on ? SePrivilegeEnabled : 0 };
             // Succeeds without enabling it when the token doesn't hold it, which this tells apart.
             return AdjustTokenPrivileges(token, false, ref privileges, 0, 0, 0) && Marshal.GetLastPInvokeError() == 0;
         }
@@ -203,6 +207,6 @@ internal sealed partial class UserAccess : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AdjustTokenPrivileges(SafeAccessTokenHandle token, [MarshalAs(UnmanagedType.Bool)] bool disableAll, ref TokenPrivileges state, uint length, nint previous, nint returned);
 
-    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
-    private static partial SafeFileHandle CreateFile(string path, uint access, uint share, nint security, uint disposition, uint flags, nint template);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial SafeFileHandle ReOpenFile(SafeFileHandle original, uint access, uint share, uint flags);
 }

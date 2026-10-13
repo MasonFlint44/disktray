@@ -8,8 +8,8 @@ namespace DiskTray.Compactor;
 
 /// <summary>
 /// Started by DiskTray with admin rights: <c>DiskTray.Compactor.exe --pipe &lt;name&gt;
-/// [--dry-run] --disk &lt;path.vhdx&gt;…</c>. Connects to the app's pipe, waits for "go" (sent
-/// once WSL is shut down), compacts each disk and reports back.
+/// [--dry-run] --disk &lt;path.vhdx&gt;…</c>. Connects to the app's pipe, checks each disk,
+/// waits for "go" (sent once WSL is shut down), compacts each disk and reports back.
 /// </summary>
 internal static class Program
 {

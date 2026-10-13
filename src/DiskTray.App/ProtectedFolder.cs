@@ -38,15 +38,18 @@ internal static partial class ProtectedFolder
     /// </summary>
     public static string? Problem(string exe)
     {
-        if (IsElevated())
+        switch (IsElevated())
         {
-            // DiskTray itself running as admin (started that way, or by the built-in
-            // Administrator account, which UAC doesn't split) would start the Compactor with
-            // no prompt, and the checks below can't tell what a normal process could change.
-            // With UAC off everything runs as admin: there's no line for a swapped exe to cross.
-            return UacOn()
-                ? "DiskTray is running as admin. Start it normally, from an account other than the built-in Administrator, and it asks for admin when it compacts"
-                : null;
+            case null:
+                return "DiskTray couldn't check whether it's running as admin";
+            case true:
+                // DiskTray itself running as admin (started that way, or by the built-in
+                // Administrator account, which UAC doesn't split) would start the Compactor with
+                // no prompt, and the checks below can't tell what a normal process could change.
+                // With UAC off everything runs as admin: there's no line for a swapped exe to cross.
+                return UacOn()
+                    ? "DiskTray is running as admin. Start it normally, from an account other than the built-in Administrator, and it asks for admin when it compacts"
+                    : null;
         }
 
         return FolderProblem(exe);
@@ -130,12 +133,18 @@ internal static partial class ProtectedFolder
 
     /// <summary>
     /// Whether this process has admin rights in effect: started as administrator, run by the
-    /// built-in Administrator account, or by any admin with UAC off. Unknown counts as yes.
+    /// built-in Administrator account, or by any admin with UAC off. Null when it can't be told.
     /// </summary>
-    private static bool IsElevated()
+    private static bool? IsElevated()
     {
         using var identity = WindowsIdentity.GetCurrent();
-        return !GetTokenInformation(identity.AccessToken, TokenElevationClass, out int elevated, sizeof(int), out _) || elevated != 0;
+        if (!GetTokenInformation(identity.AccessToken, TokenElevationClass, out int elevated, sizeof(int), out _))
+        {
+            Log.Info($"Couldn't tell whether DiskTray is running as admin: error {Marshal.GetLastPInvokeError()}");
+            return null;
+        }
+
+        return elevated != 0;
     }
 
     /// <summary>Whether UAC is on (EnableLUA). Unknown counts as on, which only means not compacting.</summary>

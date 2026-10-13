@@ -54,7 +54,9 @@ internal static class HiddenProcess
             using var process = Process.Start(start) ?? throw new InvalidOperationException($"{Path.GetFileName(exe)} didn't start.");
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();
-            if (!process.WaitForExit(timeout) || !Task.WaitAll([output, error], timeout))
+            // One deadline for exiting and for the output, so the timeout is never doubled.
+            var clock = Stopwatch.StartNew();
+            if (!process.WaitForExit(timeout) || !Task.WaitAll([output, error], Remaining(timeout, clock)))
             {
                 process.Kill(entireProcessTree: true);
                 return (null, $"timed out after {timeout.TotalSeconds:0} s", null);
@@ -69,4 +71,7 @@ internal static class HiddenProcess
             return (null, e.Message, null);
         }
     }
+
+    private static TimeSpan Remaining(TimeSpan timeout, Stopwatch clock) =>
+        timeout > clock.Elapsed ? timeout - clock.Elapsed : TimeSpan.Zero;
 }
