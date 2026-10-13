@@ -879,6 +879,14 @@ public class ProtectedFolderTests
         Assert.Contains("can be changed without admin permission", AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
     }
 
+    [Fact]
+    public void Knows_trustedinstaller_by_the_id_windows_gives_it()
+    {
+        var named = new NTAccount(@"NT SERVICE\TrustedInstaller").Translate(typeof(SecurityIdentifier));
+
+        Assert.Equal(ProtectedFolder.TrustedInstaller, named.Value);
+    }
+
     [Theory]
     [InlineData(null, true, "DiskTray couldn't check whether it's running as admin")]
     [InlineData(true, true, "DiskTray is running as admin.")]

@@ -36,12 +36,15 @@ internal static partial class ProtectedFolder
     /// <summary>Above the folder, only what would let it be renamed or re-permissioned.</summary>
     private static readonly uint[] AncestorRights = [FILE_DELETE_CHILD, DELETE, WRITE_DAC, WRITE_OWNER];
 
+    /// <summary>NT SERVICE\TrustedInstaller, which owns much of Windows (C:\ and Program Files among it).</summary>
+    internal const string TrustedInstaller = "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
     /// <summary>Who may own, or be let change, what an admin process runs: SYSTEM, Administrators and TrustedInstaller.</summary>
     private static readonly SecurityIdentifier[] Trusted =
     [
         new(WellKnownSidType.LocalSystemSid, null),
         new(WellKnownSidType.BuiltinAdministratorsSid, null),
-        new("S-1-5-80-956008885-3418522649-1831038044-1850952788-1959008016"),
+        new(TrustedInstaller),
     ];
 
     /// <summary>
