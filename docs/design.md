@@ -385,14 +385,17 @@ General.
     checked before the Compactor says it's ready, while WSL still has the disk open (that
     counts as a yes, since the permission is checked first), and again while the disk is
     held for compacting. Reading another account's DiskTray can need the debug privilege,
-    which is turned on only for that and off again straight after.
+    which is turned on only for that and off straight after (off even if the
+    Compactor started with it on).
   - **Only from an admin-only folder.** Before the admin prompt, the app checks that
     nothing without admin rights can change the Compactor itself: write, replace or
     re-permission the exe or anything in its folder, add a file there (a planted DLL
     would load into it), or move the folder or one above it. It tests what it can do
     itself by opening each with those rights and closing again, then reads each one's
     owner and permissions for what any other account could: only SYSTEM,
-    Administrators and TrustedInstaller may own one or be let change it. First, the
+    Administrators and TrustedInstaller may be let change one, or own one (another
+    owner can always re-permission it, unless an OWNER RIGHTS entry limits what the
+    owner gets). First, the
     exe's real path must be the path DiskTray runs it by, so no folder on the way is a
     junction or other link, and no drive letter of the user's own (`subst`) or network
     share is in it; and nothing in its folder may be a link. Otherwise the checks would

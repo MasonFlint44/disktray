@@ -339,8 +339,10 @@ public class UserAccessTests
         using var other = Process.Start(new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "ping.exe"), ["-n", "30", "127.0.0.1"]) { CreateNoWindow = true, UseShellExecute = false })!;
         try
         {
-            // Permissions that let no one in, so only the debug privilege opens it.
+            // Permissions that let no one in, so only the debug privilege opens it; and the
+            // privilege off to begin with (the runner can start with it on), so it's needed.
             Privileges.LockOut(other);
+            Privileges.DebugOff();
 
             using var user = UserAccess.OfProcess((uint)other.Id, out string? problem);
 
@@ -817,7 +819,9 @@ public class ProtectedFolderTests
     {
         using var folder = new AdminOnlyFolder();
 
-        Assert.Null(AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+        string? problem = AdminOnlyFolder.ProblemAsEveryday(folder.Exe);
+
+        Assert.True(problem is null, TestLog.Explain(problem));
     }
 
     /// <summary>
@@ -850,9 +854,16 @@ public class ProtectedFolderTests
     {
         using var folder = new AdminOnlyFolder();
         using var temp = new TestFolder();
-        Junction.Create(Path.Combine(folder.Path, "runtimes"), temp.Path);
-
-        Assert.Contains("there's a link in the Compactor's folder", AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+        string link = Junction.Create(Path.Combine(folder.Path, "runtimes"), temp.Path);
+        try
+        {
+            Assert.Contains("there's a link in the Compactor's folder", AdminOnlyFolder.ProblemAsEveryday(folder.Exe));
+        }
+        finally
+        {
+            // The junction itself, before what it points to goes.
+            Directory.Delete(link);
+        }
     }
 
     /// <summary>Write access given to some other everyday account, which opening the file as this one can't show.</summary>
@@ -925,6 +936,7 @@ owhere\DiskTray.Compactor.exe", () => elevated, () => uacOn);
         Admin.SkipUnlessElevated();
 
         Assert.Null(CompactorLauncher.NotNative(exe!));
-        Assert.Null(AdminOnlyFolder.ProblemAsEveryday(exe!));
+        string? problem = AdminOnlyFolder.ProblemAsEveryday(exe!);
+        Assert.True(problem is null, TestLog.Explain(problem));
     }
 }

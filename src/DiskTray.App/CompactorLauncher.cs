@@ -23,6 +23,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     private NamedPipeServerStream? _pipe;
     private StreamWriter? _writer;
     private Process? _process;
+    private bool _startedProcess;
     private CompactStatus? _status;
     private volatile PipeState _state = PipeState.NotListening;
 
@@ -114,6 +115,7 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
         try
         {
             _process = Process.Start(start);
+            _startedProcess = true;
         }
         catch (Win32Exception e) when (e.NativeErrorCode == Cancelled)
         {
@@ -212,7 +214,11 @@ internal sealed class CompactorLauncher(nint owner = 0) : ICompactorLauncher, ID
     public void Dispose()
     {
         Close();
-        _process?.Dispose();
+        // Only the one it started; one handed to Listen is its caller's.
+        if (_startedProcess)
+        {
+            _process?.Dispose();
+        }
     }
 
     private async Task ListenAsync(NamedPipeServerStream pipe, int clientId)

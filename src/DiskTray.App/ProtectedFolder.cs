@@ -36,17 +36,19 @@ internal static partial class ProtectedFolder
     /// <summary>Above the folder, only what would let it be renamed or re-permissioned.</summary>
     private static readonly uint[] AncestorRights = [FILE_DELETE_CHILD, DELETE, WRITE_DAC, WRITE_OWNER];
 
-    /// <summary>
-    /// Who may own, or be let change, what an admin process runs: SYSTEM, Administrators,
-    /// TrustedInstaller, and the owner (OWNER RIGHTS), who must be one of those.
-    /// </summary>
+    /// <summary>Who may own, or be let change, what an admin process runs: SYSTEM, Administrators and TrustedInstaller.</summary>
     private static readonly SecurityIdentifier[] Trusted =
     [
         new(WellKnownSidType.LocalSystemSid, null),
         new(WellKnownSidType.BuiltinAdministratorsSid, null),
         new("S-1-5-80-956008885-3418522649-1831038044-1850952788-1959008016"),
-        new("S-1-3-4"),
     ];
+
+    /// <summary>
+    /// OWNER RIGHTS: where the permissions name it, the owner gets only what it's given,
+    /// rather than always being able to re-permission what it owns.
+    /// </summary>
+    private static readonly SecurityIdentifier OwnerRights = new("S-1-3-4");
 
     /// <summary>CREATOR OWNER: only a pattern for what's created inside, so it grants nothing where it's set.</summary>
     private static readonly SecurityIdentifier CreatorOwner = new(WellKnownSidType.CreatorOwnerSid, null);
@@ -199,10 +201,10 @@ internal static partial class ProtectedFolder
     }
 
     /// <summary>
-    /// Whether an account other than <see cref="Trusted"/> owns <paramref name="path"/> (an
-    /// owner can always re-permission it) or is allowed any of <paramref name="rights"/> on it,
-    /// by its permissions as written. Catches another everyday account having write access,
-    /// which opening it as this one can't.
+    /// Whether an account other than <see cref="Trusted"/> is allowed any of
+    /// <paramref name="rights"/> on <paramref name="path"/> by its permissions as written, or
+    /// owns it while they leave the owner free to re-permission it. Catches another everyday
+    /// account having write access, which opening it as this one can't.
     /// </summary>
     private static Access GrantedToOthers(string path, uint[] rights, bool isFolder)
     {
@@ -210,21 +212,27 @@ internal static partial class ProtectedFolder
         {
             const AccessControlSections sections = AccessControlSections.Owner | AccessControlSections.Access;
             FileSystemSecurity security = isFolder ? new DirectoryInfo(path).GetAccessControl(sections) : new FileInfo(path).GetAccessControl(sections);
-            if (security.GetOwner(typeof(SecurityIdentifier)) is not SecurityIdentifier owner || !Trusted.Contains(owner))
+            var owner = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+            bool ownerTrusted = owner is not null && Trusted.Contains(owner);
+            var rules = security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>()
+                .Where(r => !r.PropagationFlags.HasFlag(PropagationFlags.InheritOnly))
+                .ToList();
+            if (!ownerTrusted && !rules.Any(r => OwnerRights.Equals(r.IdentityReference)))
             {
-                Log.Info($"{path} is owned by {security.GetOwner(typeof(SecurityIdentifier))?.Value ?? "no one it can read"}");
+                Log.Info($"{path} is owned by {owner?.Value ?? "no one it can read"}, who can re-permission it");
                 return Access.Granted;
             }
 
             uint wanted = rights.Aggregate(GENERIC_ALL | GENERIC_WRITE, (all, right) => all | right);
-            foreach (FileSystemAccessRule rule in security.GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier)))
+            foreach (var rule in rules)
             {
                 if (rule.AccessControlType == AccessControlType.Allow
-                    && !rule.PropagationFlags.HasFlag(PropagationFlags.InheritOnly)
                     && ((uint)rule.FileSystemRights & wanted) != 0
                     && rule.IdentityReference is SecurityIdentifier sid
                     && !Trusted.Contains(sid)
-                    && sid != CreatorOwner)
+                    && sid != CreatorOwner
+                    && !(sid == OwnerRights && ownerTrusted))
                 {
                     Log.Info($"{path} lets {sid.Value} change it (0x{(uint)rule.FileSystemRights:x})");
                     return Access.Granted;

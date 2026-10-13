@@ -368,6 +368,7 @@ internal static unsafe partial class Privileges
 {
     private const int TokenPrivilegesClass = 3;
     private const uint TokenQuery = 0x8;
+    private const uint TokenAdjustPrivileges = 0x20;
     private const uint Enabled = 0x2;
     private const int KernelObject = 6;
     private const uint DaclSecurityInformation = 0x4;
@@ -400,6 +401,24 @@ internal static unsafe partial class Privileges
         return false;
     }
 
+    /// <summary>Turns SeDebugPrivilege off in this process's token.</summary>
+    public static void DebugOff()
+    {
+        Assert.True(LookupPrivilegeValue(null, "SeDebugPrivilege", out long debug));
+        Assert.True(OpenProcessToken(-1, TokenQuery | TokenAdjustPrivileges, out var token), $"OpenProcessToken failed ({Marshal.GetLastPInvokeError()})");
+        using (token)
+        {
+            // TOKEN_PRIVILEGES with one entry: a count, the LUID and its attributes (none: off).
+            var off = stackalloc byte[16];
+            *(uint*)off = 1;
+            *(long*)(off + 4) = debug;
+            *(uint*)(off + 12) = 0;
+            Assert.True(AdjustTokenPrivileges(token, false, off, 0, 0, 0), $"AdjustTokenPrivileges failed ({Marshal.GetLastPInvokeError()})");
+        }
+
+        Assert.False(DebugIsOn());
+    }
+
     /// <summary>Gives <paramref name="process"/> permissions that let no one in, so only the debug privilege opens it.</summary>
     public static void LockOut(Process process)
     {
@@ -424,6 +443,10 @@ internal static unsafe partial class Privileges
     [LibraryImport("advapi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetTokenInformation(SafeAccessTokenHandle token, int infoClass, byte* info, int length, out int returned);
+
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool AdjustTokenPrivileges(SafeAccessTokenHandle token, [MarshalAs(UnmanagedType.Bool)] bool disableAll, byte* state, uint length, nint previous, nint returned);
 
     [LibraryImport("advapi32.dll")]
     private static partial uint SetSecurityInfo(SafeProcessHandle handle, int objectType, uint securityInfo, nint owner, nint group, nint dacl, nint sacl);

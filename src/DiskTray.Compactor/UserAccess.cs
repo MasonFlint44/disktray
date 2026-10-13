@@ -70,9 +70,10 @@ internal sealed partial class UserAccess : IDisposable
         if (token is null && error == WindowsError.AccessDenied && SetDebugPrivilege(true))
         {
             token = ImpersonationToken(id, out error);
-            // Only needed for that; off again, so nothing later runs with it.
-            SetDebugPrivilege(false);
         }
+
+        // Only ever needed for that, so it's off from here on, even if this process started with it on.
+        SetDebugPrivilege(false);
 
         problem = token is null ? $"couldn't read which account asked (error {error})" : null;
         return token is null ? null : new UserAccess(token);
